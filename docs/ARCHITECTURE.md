@@ -36,9 +36,9 @@ The cost is one button click. Worth revisiting if this cluster ever carries some
 
 The cluster currently running (`kubia`) was created manually before this pipeline existed. It gets adopted into Terraform via `import` rather than recreated — see [terraform-import.md](terraform-import.md) for why that's safe and how it works.
 
-## ArgoCD vs Flux (open decision)
+## ArgoCD vs Flux — decided: Argo CD
 
-Both are CNCF GitOps controllers that do fundamentally the same job — reconcile cluster state against a Git repo. Neither is committed to yet; noting the tradeoff here so the decision (and reasoning) is recorded once made.
+Both are CNCF GitOps controllers that do fundamentally the same job — reconcile cluster state against a Git repo. The tradeoff is recorded below; the decision is **Argo CD**, with the reasoning in [argocd.md](argocd.md).
 
 | | ArgoCD | Flux |
 |---|---|---|
@@ -47,12 +47,23 @@ Both are CNCF GitOps controllers that do fundamentally the same job — reconcil
 | Good for learning | Very visual — good for seeing sync state and drift at a glance | Forces you to understand the underlying controller/CRD mechanics more directly |
 | Multi-tenancy / scale | Strong, used widely at scale in orgs | Also strong, slightly more composable/unix-y |
 
-Given the learning goal of this repo, ArgoCD's UI is likely the easier on-ramp for *seeing* GitOps work, while Flux forces a deeper understanding of the controller pattern itself. Leaning ArgoCD first, revisit once the cluster is up — see [ROADMAP.md](ROADMAP.md).
+Argo CD wins on the criterion that actually matters here: this cluster exists to make GitOps *visible*, and Argo CD's UI shows sync state, drift, and per-resource diffs directly. Flux's counter-argument is real — its controller-per-concern CRD model forces a deeper understanding of the reconciliation machinery, rather than letting a UI paper over it — and is the reason to revisit this if the visual on-ramp stops teaching anything new.
+
+The tiebreaker was the next piece of work: Keycloak. Argo CD speaks OIDC natively and ships an RBAC model that maps OIDC group claims onto roles, which is exactly the shape of that task.
+
+## Argo CD manages Argo CD
+
+The controller is installed by hand exactly once and reconciled from this repo thereafter — including its own upgrades. The bootstrap is deliberately `helm template | kubectl apply` rather than `helm install`, so the manual step produces byte-identical output to what Argo CD will later produce on its own; the handover is then a no-op rather than a permanent disagreement about ownership metadata.
+
+Below Argo CD sits an "app of apps": one root `Application`, applied by hand, whose only job is to find every `application.yaml` under `gitops/` and create an `Application` from it. Adding a component is a directory plus a commit. Full detail in [argocd.md](argocd.md).
+
+This is the same "if it's not in Git, it's not really there" premise as the Terraform layer, applied to the controller itself — with one honest asymmetry: a commit that breaks Argo CD breaks the thing that would apply the fix. That's the cost of self-management, and the reason its config is kept boring.
 
 ## Directory-to-responsibility mapping
 
 | Path | Owned by | Purpose |
 |---|---|---|
 | `terraform/` | GitHub Actions (plan on PR and `main`, apply on manual dispatch) | Cluster + GCP infra |
-| `gitops/infra/` | GitOps controller | Cluster-wide infra: ingress controller, cert-manager, monitoring |
-| `gitops/apps/` | GitOps controller | Actual workloads deployed on the cluster |
+| `gitops/bootstrap/` | Applied by hand, once | The root `Application` that creates every other one |
+| `gitops/infra/` | Argo CD | Cluster-wide infra: Argo CD itself, and later ingress, cert-manager, monitoring |
+| `gitops/apps/` | Argo CD | Actual workloads deployed on the cluster |

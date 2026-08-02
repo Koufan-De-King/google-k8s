@@ -1,0 +1,66 @@
+# -----------------------------------------------------------------------------
+# Argo CD managing Argo CD
+# -----------------------------------------------------------------------------
+# The controller that reconciles this cluster is itself reconciled from this
+# repo. After the one-time bootstrap (docs/argocd.md), no further change to
+# Argo CD — a version bump, an OIDC config, an RBAC policy — is made by
+# running helm or kubectl. You edit values.yaml next to this file, commit,
+# and Argo CD upgrades itself.
+#
+# The obvious question: how does it not saw off the branch it's sitting on?
+# Mostly it just works — Argo applies a new Deployment spec, the old pod
+# terminates, the new one comes up and carries on reconciling. The sync that
+# replaces argocd-server is completed by the *old* server process; the new
+# one inherits the result. The one genuine failure mode is committing values
+# that produce a broken Argo CD, because then the thing that would fix the
+# next commit is the thing that's broken. Recovery is the bootstrap procedure
+# in docs/argocd.md, which never depends on a running Argo CD.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  # Two sources, because the chart and its configuration live in different
+  # places: the chart is published by the Argo project, the values are ours.
+  # The `ref` mechanism is what lets a valueFile reach across into the other
+  # source — without it, valueFiles could only point at files inside the
+  # chart itself, and our config would have to be inlined into this manifest
+  # (unreadable, and un-diffable in a PR).
+  sources:
+    - repoURL: https://argoproj.github.io/argo-helm
+      chart: argo-cd
+      # Pinned deliberately. An unpinned chart means Argo CD upgrades itself
+      # whenever upstream publishes — an unreviewed change to the component
+      # holding admin-level control of the cluster. Bumping this line is how
+      # an upgrade happens: visible in a diff, attached to a commit.
+      targetRevision: 10.2.2 # Argo CD v3.4.6
+      helm:
+        valueFiles:
+          - $values/gitops/infra/argocd/values.yaml
+
+    - repoURL: https://github.com/Koufan-De-King/google-k8s.git
+      targetRevision: main
+      ref: values
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # Server-side apply is not optional here. Argo CD's own CRDs
+      # (Application, ApplicationSet) are enormous, and a client-side apply
+      # stores the entire manifest in the last-applied-configuration
+      # annotation — which overflows the 256KB annotation limit and fails
+      # with "metadata.annotations: Too long". Server-side apply doesn't use
+      # that annotation at all, so the limit never comes into play.
+      - ServerSideApply=true

@@ -1,0 +1,66 @@
+# -----------------------------------------------------------------------------
+# The root Application ("app of apps")
+# -----------------------------------------------------------------------------
+# This is the single manifest you apply by hand, exactly once, and never
+# again. Everything else in gitops/ arrives because this object exists.
+#
+# The pattern: this Application's "workload" is not a real workload at all —
+# it's other Application manifests. Argo CD syncs this app, finds an
+# application.yaml under each component directory, and creates those
+# Applications. Each of those then deploys its actual component. One manual
+# `kubectl apply` bootstraps an arbitrarily large tree.
+#
+# Why bother, instead of just applying every Application by hand once?
+# Because "by hand once" doesn't survive contact with reality: adding a new
+# component later would mean another manual apply, and nothing would notice
+# if someone deleted an Application object. With a root app, adding a
+# component is a git commit, and deleting an Application out of the cluster
+# gets it recreated on the next sync. The set of installed components becomes
+# a fact about this repo rather than a fact about who ran what.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+  # Without this finalizer, deleting the root Application orphans every child
+  # Application it created — they'd keep running with nothing managing them.
+  # With it, Argo CD cascades the delete properly. This is also why you should
+  # think before `kubectl delete -f` on this file: it takes the whole tree.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/Koufan-De-King/google-k8s.git
+    targetRevision: main
+    path: gitops
+
+    directory:
+      # Walk the whole gitops/ tree, but only pick up files named
+      # application.yaml. That's the convention this repo uses: a directory
+      # under infra/ or apps/ becomes a deployed component the moment it
+      # contains an application.yaml, and stays inert until then.
+      #
+      # The include filter matters. Without it, the root app would also try
+      # to apply values.yaml — a Helm values file, not a Kubernetes object —
+      # and fail on it.
+      recurse: true
+      include: "**/application.yaml"
+
+  destination:
+    # The child Application *objects* live here, in argocd's namespace.
+    # Where each child actually deploys its component is that child's
+    # business, declared in its own destination.
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      # Recreate child Applications that get deleted out of the cluster.
+      selfHeal: true
+      # Remove child Applications whose application.yaml was deleted from
+      # git. This is what makes "delete the directory" a working uninstall.
+      prune: true
+    syncOptions:
+      - CreateNamespace=false

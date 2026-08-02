@@ -1,0 +1,117 @@
+# Helm values for the argo-cd chart. This file is the whole configuration
+# surface for Argo CD in this cluster — both at bootstrap time (rendered by
+# `helm template`) and forever after (read by Argo CD's own Application, via
+# the $values ref in application.yaml). One file, one source of truth, no
+# drift between "how it was installed" and "how it's managed".
+#
+# Chart defaults are good. Everything set below is set for a reason, stated.
+
+# The hostname Argo CD believes it is reachable at. Still the chart's
+# placeholder, because it isn't reachable at any hostname yet — access is
+# via `kubectl port-forward`. This is the single knob to change when ingress
+# and Keycloak land; see the note on configs.cm below for why it matters more
+# than it looks.
+global:
+  domain: argocd.example.com
+
+configs:
+  params:
+    # Serve the API/UI over plain HTTP instead of Argo CD's self-signed TLS.
+    #
+    # This is safe *today* and only because of how the server is reached:
+    # there is no ingress yet (Phase 4 in the roadmap), so the only path to
+    # it is `kubectl port-forward`, which is itself an authenticated,
+    # encrypted tunnel to the API server. Terminating TLS twice inside that
+    # tunnel buys nothing except a browser warning on a self-signed cert.
+    #
+    # This MUST flip back to false — or, more likely, stay false with TLS
+    # terminated at the ingress by cert-manager — the moment argocd-server is
+    # reachable by any route other than port-forward. Exposing this as-is
+    # would put admin credentials and session tokens on the wire in clear.
+    # There is a roadmap item for exactly this; it is not a "someday".
+    server.insecure: true
+
+  cm:
+    # Disable the web terminal. It lets anyone with UI access exec into pods,
+    # which is a substantial privilege escalation from "can view apps" and is
+    # off by default in the chart. Stated explicitly rather than relied upon,
+    # because it becomes much more interesting once Keycloak is issuing
+    # logins to more than one person.
+    exec.enabled: "false"
+
+    # NOTE: Argo CD's external URL is NOT unset here — the chart defaults
+    # `global.domain` to argocd.example.com and derives `url` from it, so
+    # `https://argocd.example.com` is live in the rendered argocd-cm right
+    # now. It is a placeholder that resolves to nothing, which is harmless
+    # while the only access path is port-forward (it only affects generated
+    # links) and actively wrong the moment anything depends on it.
+    #
+    # That moment is Keycloak. OIDC works by redirecting the browser to the
+    # identity provider and back, and this value is what Argo CD hands over
+    # as the "back" address. Left as the placeholder, login fails in a way
+    # that looks like a Keycloak misconfiguration but isn't. Set
+    # `global.domain` (below) to the real hostname as part of that work —
+    # not `configs.cm.url`, or the two disagree.
+
+    # ---------------------------------------------------------------------
+    # Keycloak / OIDC — the next thing to land. Left here as a marker so the
+    # shape of the change is visible before it's made.
+    #
+    # The clientSecret is written as `$oidc.keycloak.clientSecret`, which is
+    # not a literal: the leading `$` tells Argo CD to read the value out of
+    # the argocd-secret Secret at that key. That indirection is the point —
+    # the secret itself never appears in this file, and therefore never in
+    # this public repo. Getting the secret *into* the cluster is a separate
+    # problem (sealed-secrets, external-secrets, or by hand once) and is a
+    # decision for that piece of work, not this one.
+    # ---------------------------------------------------------------------
+    # oidc.config: |
+    #   name: Keycloak
+    #   issuer: https://keycloak.example.com/realms/homelab
+    #   clientID: argocd
+    #   clientSecret: $oidc.keycloak.clientSecret
+    #   requestedScopes: ["openid", "profile", "email", "groups"]
+
+  rbac:
+    # Everyone who authenticates but matches no other rule gets read-only.
+    #
+    # Irrelevant while the only account is the built-in admin (which bypasses
+    # RBAC entirely), and load-bearing the instant Keycloak starts issuing
+    # logins: the default would otherwise decide what a brand-new, unmapped
+    # identity can do. Deny-by-default now means adding Keycloak can't
+    # accidentally hand out more access than intended.
+    policy.default: role:readonly
+
+    # Group-to-role mapping goes here once Keycloak issues group claims:
+    # policy.csv: |
+    #   g, argocd-admins, role:admin
+
+# The bundled Dex is only needed to bridge identity providers that don't
+# speak OIDC (GitHub, SAML, LDAP). Keycloak *is* an OIDC provider, so Argo CD
+# can talk to it directly and this pod would sit idle forever. Off.
+dex:
+  enabled: false
+
+# Single-replica everything. This is a 3-node e2-medium cluster where the
+# realistic failure mode is "the whole zone went away" — which HA replicas
+# inside that zone would not survive either. Paying for redundancy that
+# doesn't cover the actual risk is just spending RAM.
+controller:
+  replicas: 1
+server:
+  replicas: 1
+repoServer:
+  replicas: 1
+applicationSet:
+  replicas: 1
+
+# The Redis instance Argo CD uses is a *cache*, not a datastore — the real
+# state is the cluster and this git repo. Losing it costs a slow first
+# refresh, nothing more. Left as the chart's simple single instance.
+redis:
+  enabled: true
+
+# Notifications (Slack/webhook alerts on sync failures) are genuinely useful
+# but need somewhere to send to. Off until there is one.
+notifications:
+  enabled: false

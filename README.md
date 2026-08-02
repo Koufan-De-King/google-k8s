@@ -15,36 +15,41 @@ The repo is split into two layers that change at very different speeds:
 | Layer | Tool | Changes | Responsibility |
 |---|---|---|---|
 | Infrastructure | Terraform | Rarely | Provisions the GKE cluster itself and any surrounding GCP resources (networking, IAM, node pools) |
-| Cluster state | ArgoCD or Flux (TBD) | Often | Continuously reconciles everything *inside* the cluster — workloads, in-cluster infra like ingress and cert-manager — against what's declared in this repo |
+| Cluster state | Argo CD | Often | Continuously reconciles everything *inside* the cluster — workloads, in-cluster infra like ingress and cert-manager — against what's declared in this repo |
 
-Terraform hands off a bare cluster; the GitOps controller takes it from there. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the reasoning behind this split and the ArgoCD-vs-Flux tradeoff (not yet decided).
+Terraform hands off a bare cluster; Argo CD takes it from there. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the reasoning behind this split and the Argo-CD-vs-Flux decision.
 
 ## Repo layout
 
 ```
 google-k8s/
-├── terraform/         # GKE cluster + supporting GCP infra
-├── .github/workflows/ # CI: terraform plan on PR + main, apply on manual dispatch
-├── gitops/            # Desired cluster state, synced by ArgoCD/Flux
-│   ├── infra/          # In-cluster infra: ingress, cert-manager, etc.
+├── terraform/          # GKE cluster + supporting GCP infra
+├── .github/workflows/  # CI: terraform plan on PR + main, apply on manual dispatch
+├── gitops/             # Desired cluster state, synced by Argo CD
+│   ├── bootstrap/       # The root Application — the one thing applied by hand
+│   ├── infra/           # In-cluster infra: Argo CD itself; later ingress, cert-manager
 │   └── apps/            # Actual workloads
 ├── docs/               # Architecture notes, roadmap, decisions
 └── README.md
 ```
 
-(`gitops/` is the target shape — doesn't exist yet. See status below.)
+A directory under `infra/` or `apps/` becomes a deployed component the moment it contains an `application.yaml` — the root app finds it and creates an Argo CD `Application` from it.
 
 ## Status
 
-The GKE cluster (`kubia`) exists and is healthy — created manually to get moving, now being adopted into Terraform (see [docs/terraform-import.md](docs/terraform-import.md)) so all future changes go through CI instead of by hand. GitOps controller not yet chosen or installed; nothing is deployed on the cluster yet.
+The GKE cluster (`kubia`) exists, is healthy, and is fully adopted into Terraform — CI reports no diff between the config and reality, so cluster changes now go through a PR rather than `gcloud`.
+
+Argo CD is installed and manages itself from [gitops/infra/argocd/](gitops/infra/argocd/): upgrades and config changes happen by editing `values.yaml` and committing, not by running helm. No workloads are deployed yet.
+
+Next up: Keycloak as an OIDC provider, replacing Argo CD's built-in admin account.
 
 Track progress in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Prerequisites
 
 - A GCP project with billing enabled
-- `gcloud`, `terraform`, and `kubectl` installed locally
-- (Once a GitOps controller is chosen) its CLI, e.g. `argocd` or `flux`
+- `gcloud`, `terraform`, `kubectl`, and `helm` installed locally
+- `helm` is needed only for the one-time Argo CD bootstrap ([docs/argocd.md](docs/argocd.md)); after that Argo CD renders charts itself
 
 ## Applying infrastructure changes
 
