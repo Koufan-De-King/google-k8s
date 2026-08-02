@@ -21,21 +21,27 @@ Tracks the bootstrap sequence for this repo. Update as phases complete — this 
 - [x] Point it at `gitops/` in this repo — root app-of-apps, `gitops/bootstrap/root.yaml`
 - [x] Argo CD manages its own upgrades and config from `gitops/infra/argocd/` — 42 resources, `Synced`/`Healthy`
 - [x] Drift correction verified on Argo CD itself: `kubectl scale` on `argocd-repo-server` 1→2 was reverted in ~2s (`Synced → OutOfSync → OperationCompleted → Synced`). Phase 3 repeats this on a real workload
-- [ ] Retire the `argocd-initial-admin-secret` local admin once Keycloak is issuing logins
+- [ ] Retire the `argocd-initial-admin-secret` local admin once Keycloak is issuing logins — **more urgent now that the UI is on the public internet**, see Phase 4
 
 ## Phase 2.5 — Keycloak as OIDC provider
 - [ ] Deploy Keycloak via `gitops/infra/keycloak/`
 - [ ] Decide how secrets reach the cluster (sealed-secrets / external-secrets / by hand) — blocks the Argo CD client secret
-- [ ] Point Argo CD at Keycloak: `global.domain`, `configs.cm.oidc.config`, `configs.rbac.policy.csv`
-- [ ] Needs a real hostname + TLS, so this likely pulls Phase 4's ingress and cert-manager forward
+- [ ] Point Argo CD at Keycloak: `configs.cm.oidc.config`, `configs.rbac.policy.csv` (`global.domain` is already correct)
+- [x] Prerequisite: a real hostname + TLS — done, this pulled Phase 4 forward
 
 ## Phase 3 — First real workload
 - [ ] Deploy one trivial app (e.g. a static site or hello-world container) through `gitops/apps/`
 - [ ] Confirm drift correction works: manually change something with `kubectl`, watch the controller revert it
 
 ## Phase 4 — In-cluster infra
-- [ ] Ingress controller
-- [ ] cert-manager for TLS
+Pulled forward ahead of Phase 3, because Keycloak needs a real hostname and TLS before it can do anything.
+
+- [x] Static external IP reserved in Terraform (`terraform/network.tf`) — `34.140.41.168`, so DNS can point somewhere that outlives any Kubernetes object
+- [x] Ingress controller — ingress-nginx via `gitops/infra/ingress-nginx/`, pinned to that IP
+- [x] DNS — `argocd.koufan.dev` A record at Spaceship (registrar-managed; koufan.dev is not in Cloud DNS)
+- [x] cert-manager for TLS — `gitops/infra/cert-manager/`, with Let's Encrypt issuers in `gitops/infra/cert-manager-issuers/`
+- [x] Argo CD served at https://argocd.koufan.dev on a real Let's Encrypt certificate, auto-renewing
+- [ ] **Decide how to protect the publicly-reachable Argo CD UI** — it is now on the open internet with a static admin password. Options: leave it until Keycloak lands, restrict by source IP at the ingress, or put it behind auth sooner
 - [ ] Basic observability (metrics-server at minimum)
 
 ## Phase 5 — Expand

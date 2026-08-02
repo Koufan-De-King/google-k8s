@@ -6,29 +6,43 @@
 #
 # Chart defaults are good. Everything set below is set for a reason, stated.
 
-# The hostname Argo CD believes it is reachable at. Still the chart's
-# placeholder, because it isn't reachable at any hostname yet — access is
-# via `kubectl port-forward`. This is the single knob to change when ingress
-# and Keycloak land; see the note on configs.cm below for why it matters more
-# than it looks.
+# The hostname Argo CD is reachable at, and believes itself to be reachable
+# at. Set this, never `configs.cm.url` — the chart derives the url from this
+# value, and setting both invites them to disagree.
+#
+# It drives three things: the Ingress hostname, the names on the TLS
+# certificate cert-manager requests, and the address Argo CD hands to an
+# identity provider as the "redirect back to here" target. That third one is
+# why Keycloak will care about this line.
 global:
   domain: argocd.koufan.dev
 
 configs:
   params:
-    # Serve the API/UI over plain HTTP instead of Argo CD's self-signed TLS.
+    # Run argocd-server WITHOUT TLS on its own listener. The flag is badly
+    # named: it describes the listener, not the site. The site is HTTPS.
     #
-    # This is safe *today* and only because of how the server is reached:
-    # there is no ingress yet (Phase 4 in the roadmap), so the only path to
-    # it is `kubectl port-forward`, which is itself an authenticated,
-    # encrypted tunnel to the API server. Terminating TLS twice inside that
-    # tunnel buys nothing except a browser warning on a self-signed cert.
+    # TLS terminates one hop earlier, at ingress-nginx, using a real Let's
+    # Encrypt certificate. Two hops, two different answers:
     #
-    # This MUST flip back to false — or, more likely, stay false with TLS
-    # terminated at the ingress by cert-manager — the moment argocd-server is
-    # reachable by any route other than port-forward. Exposing this as-is
-    # would put admin credentials and session tokens on the wire in clear.
-    # There is a roadmap item for exactly this; it is not a "someday".
+    #   browser  -> nginx           HTTPS, trusted cert, public internet
+    #   nginx    -> argocd-server   plain HTTP, inside the pod network
+    #
+    # koufan.dev is on the HSTS preload list, so browsers refuse plain HTTP
+    # to it outright. That constraint is satisfied by the first hop and says
+    # nothing about the second.
+    #
+    # This stays `true`. Setting it to false would make argocd-server present
+    # a SELF-SIGNED certificate to nginx, which nginx would then have to be
+    # told not to verify (`proxy-ssl-verify off`) — encryption without
+    # authentication, on a hop that never leaves the cluster. It also breaks
+    # the gRPC path the `argocd` CLI uses. This is the arrangement Argo CD's
+    # own docs recommend behind an nginx ingress; it is the intended design,
+    # not a compromise.
+    #
+    # The honest residual: that internal hop is unencrypted, so node-level
+    # access could read it. The real answer at scale is a service mesh doing
+    # mTLS uniformly, not hand-rolled self-signed certs between pods.
     server.insecure: true
 
   cm:
@@ -39,19 +53,11 @@ configs:
     # logins to more than one person.
     exec.enabled: "false"
 
-    # NOTE: Argo CD's external URL is NOT unset here — the chart defaults
-    # `global.domain` to argocd.example.com and derives `url` from it, so
-    # `https://argocd.example.com` is live in the rendered argocd-cm right
-    # now. It is a placeholder that resolves to nothing, which is harmless
-    # while the only access path is port-forward (it only affects generated
-    # links) and actively wrong the moment anything depends on it.
-    #
-    # That moment is Keycloak. OIDC works by redirecting the browser to the
-    # identity provider and back, and this value is what Argo CD hands over
-    # as the "back" address. Left as the placeholder, login fails in a way
-    # that looks like a Keycloak misconfiguration but isn't. Set
-    # `global.domain` (below) to the real hostname as part of that work —
-    # not `configs.cm.url`, or the two disagree.
+    # `configs.cm.url` is deliberately absent. The chart derives it from
+    # `global.domain` at the top of this file, which is now the real
+    # hostname, so the rendered argocd-cm already carries
+    # https://argocd.koufan.dev. Setting it here as well would create two
+    # sources of truth that can drift apart.
 
     # ---------------------------------------------------------------------
     # Keycloak / OIDC — the next thing to land. Left here as a marker so the

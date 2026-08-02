@@ -39,9 +39,11 @@ A directory under `infra/` or `apps/` becomes a deployed component the moment it
 
 The GKE cluster (`kubia`) exists, is healthy, and is fully adopted into Terraform — CI reports no diff between the config and reality, so cluster changes now go through a PR rather than `gcloud`.
 
-Argo CD is installed and manages itself from [gitops/infra/argocd/](gitops/infra/argocd/): upgrades and config changes happen by editing `values.yaml` and committing, not by running helm. No workloads are deployed yet.
+Argo CD is installed and manages itself from [gitops/infra/argocd/](gitops/infra/argocd/): upgrades and config changes happen by editing `values.yaml` and committing, not by running helm.
 
-Next up: Keycloak as an OIDC provider, replacing Argo CD's built-in admin account.
+It is served at **https://argocd.koufan.dev** on a Let's Encrypt certificate that renews itself — behind ingress-nginx, pinned to a static IP reserved in Terraform, with certificates issued by cert-manager. Five Argo CD Applications currently reconcile the cluster: `root`, `argocd`, `ingress-nginx`, `cert-manager`, and `cert-manager-issuers`. No workloads are deployed yet.
+
+Next up: Keycloak as an OIDC provider, replacing Argo CD's built-in admin account — which matters more now that the UI is reachable from the public internet.
 
 Track progress in [docs/ROADMAP.md](docs/ROADMAP.md).
 
