@@ -109,7 +109,7 @@ server:
       # THIS is what triggers everything. cert-manager watches Ingress
       # objects for this annotation and creates a Certificate from the
       # spec.tls block automatically.
-      cert-manager.io/cluster-issuer: letsencrypt-staging
+      cert-manager.io/cluster-issuer: letsencrypt-prod
 repoServer:
   replicas: 1
 applicationSet:
