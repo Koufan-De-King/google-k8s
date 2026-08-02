@@ -23,3 +23,8 @@ output "node_pool_name" {
   description = "Name of the managed node pool."
   value       = google_container_node_pool.default_pool.name
 }
+
+output "ingress_ip" {
+  description = "Static external IP fronting ingress-nginx. This is the A record target."
+  value       = google_compute_address.ingress_nginx.address
+}
