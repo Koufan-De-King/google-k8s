@@ -1,0 +1,17 @@
+# Copy to terraform.tfvars (gitignored) for local `terraform plan`/`apply`.
+# Everything here has a sensible default in variables.tf already except
+# project_id, which has none on purpose — you must supply it explicitly.
+#
+# GitHub Actions does not use this file; it passes -var flags directly
+# (see .github/workflows/terraform.yml), sourced from repo variables/secrets.
+
+project_id = "your-gcp-project-id"
+
+# Uncomment to override defaults:
+# region         = "europe-west1"
+# zone           = "europe-west1-b"
+# cluster_name   = "kubia"
+# node_pool_name = "default-pool"
+# node_count     = 3
+# machine_type   = "e2-medium"
+# disk_size_gb   = 50

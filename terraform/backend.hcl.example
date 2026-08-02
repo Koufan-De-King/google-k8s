@@ -1,0 +1,14 @@
+# Partial backend config for `terraform init -backend-config=backend.hcl`.
+#
+# Not secret — a GCS bucket name isn't sensitive — but it's environment-
+# specific (unique per GCP project) so it's kept out of versions.tf and
+# provided at init time instead. Copy this file to `backend.hcl` (gitignored)
+# and fill in the real bucket name after creating it — see
+# docs/github-actions-auth.md for the one-time bucket creation command.
+#
+# GitHub Actions doesn't use this file at all; the workflow passes the same
+# two keys via `-backend-config="bucket=..."` flags using a repo variable,
+# so the bucket name only has to be typed once, in one place.
+
+bucket = "REPLACE_WITH_YOUR_STATE_BUCKET_NAME"
+prefix = "terraform/state"
