@@ -12,6 +12,6 @@
 resource "google_compute_address" "ingress_nginx" {
   name         = "ingress-nginx-ip"
   project      = var.project_id
-  region       = var.region     # europe-west1 - the region, not the zone
+  region       = var.region # europe-west1 - the region, not the zone
   address_type = "EXTERNAL"
 }
