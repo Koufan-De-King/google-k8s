@@ -1,0 +1,9 @@
+# The chart does NOT install its CRDs by default. Without this, every
+# Certificate and ClusterIssuer you create is rejected as an unknown
+# kind, which reads as a typo rather than a missing install.
+crds:
+  enabled: true
+  keep: true      # do not delete CRDs on uninstall - deleting them
+                  # destroys every Certificate object in the cluster.
+ 
+replicaCount: 1
