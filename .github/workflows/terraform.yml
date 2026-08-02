@@ -1,0 +1,114 @@
+name: Terraform
+
+# Plan on every PR that touches terraform/, so you can review the diff
+# before anything real happens. Plan again on main after merge, so main
+# always has a current picture of any drift between repo and reality.
+#
+# Applying is deliberately NOT automatic on merge. It only happens when
+# someone manually runs this workflow from the Actions tab
+# (workflow_dispatch) against main. The reasoning: a merge is a statement
+# about what the *desired* state should be; it shouldn't also be the thing
+# that reaches out and mutates a live cluster before a human has read the
+# plan. This repo has already had one unreviewed apply delete a real node
+# pool (see docs/terraform-import.md), and an auto-apply on merge is
+# exactly the shape of pipeline that lets that happen unattended.
+#
+# The tradeoff is honest: this is weaker GitOps than "merge is the
+# deploy". It's the right trade for a single-operator learning cluster
+# where the cost of a bad apply is high and the cost of clicking a button
+# is nearly zero. Revisit if this ever has real uptime obligations.
+on:
+  pull_request:
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform.yml"
+  workflow_dispatch: {} # the "apply now" button in the Actions tab — this is the *only* trigger that applies
+
+permissions:
+  contents: read
+  id-token: write # required for Workload Identity Federation — this is what lets GitHub mint a short-lived GCP token without a stored key
+  pull-requests: write # lets the plan step comment the diff on the PR
+
+defaults:
+  run:
+    working-directory: terraform
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --- Auth: Workload Identity Federation (recommended, keyless) -------
+      # GitHub's OIDC token gets exchanged for short-lived GCP credentials.
+      # Nothing secret is stored in this repo — GCP_WIF_PROVIDER and
+      # GCP_SERVICE_ACCOUNT are identifiers, not credentials, so they're
+      # repo *variables* (vars), not secrets. One-time GCP-side setup for
+      # this (WIF pool, provider, IAM binding) is in
+      # docs/github-actions-auth.md.
+      - name: Authenticate to GCP (Workload Identity Federation)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      # --- Auth alternative: service account JSON key (simpler, less secure) --
+      # If you'd rather skip WIF setup for now, comment out the step above
+      # and use this instead. Requires one secret: GCP_SA_KEY, containing
+      # the full JSON key file contents. Documented in
+      # docs/github-actions-auth.md alongside WIF — switching later just
+      # means swapping this step back out, nothing else in this workflow
+      # or in terraform/ changes.
+      #
+      # - name: Authenticate to GCP (service account key)
+      #   uses: google-github-actions/auth@v2
+      #   with:
+      #     credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "latest" # required_version in versions.tf (>= 1.7.0) is the real guardrail
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="prefix=terraform/state"
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan \
+            -var="project_id=${{ vars.GCP_PROJECT_ID }}" \
+            -out=tfplan \
+            -no-color
+
+      # Applies only when a human manually dispatches this workflow against
+      # main. Never on a PR, and never on a plain push/merge — those can
+      # only ever show you what *would* happen.
+      #
+      # The `github.ref` guard matters independently of the event: the
+      # Actions tab lets you dispatch against any branch, and without it a
+      # dispatch from a feature branch would apply that branch's config to
+      # the real cluster.
+      #
+      # -auto-approve is safe here specifically because it consumes the
+      # saved `tfplan` from the step above — a plan of this exact commit,
+      # made seconds earlier in this same job. It approves that file, not
+      # "whatever Terraform decides to do next".
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+        run: terraform apply -auto-approve tfplan
