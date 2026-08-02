@@ -23,19 +23,20 @@ Terraform hands off a bare cluster; the GitOps controller takes it from there. S
 
 ```
 google-k8s/
-├── terraform/        # GKE cluster + supporting GCP infra
-├── gitops/           # Desired cluster state, synced by ArgoCD/Flux
-│   ├── infra/         # In-cluster infra: ingress, cert-manager, etc.
-│   └── apps/           # Actual workloads
-├── docs/              # Architecture notes, roadmap, decisions
+├── terraform/         # GKE cluster + supporting GCP infra
+├── .github/workflows/ # CI: terraform plan on PR + main, apply on manual dispatch
+├── gitops/            # Desired cluster state, synced by ArgoCD/Flux
+│   ├── infra/          # In-cluster infra: ingress, cert-manager, etc.
+│   └── apps/            # Actual workloads
+├── docs/               # Architecture notes, roadmap, decisions
 └── README.md
 ```
 
-(This layout is the target shape — most of it doesn't exist yet. See status below.)
+(`gitops/` is the target shape — doesn't exist yet. See status below.)
 
 ## Status
 
-Early bootstrap stage. Nothing is deployed yet. Current focus is standing up the Terraform-managed cluster and picking a GitOps controller.
+The GKE cluster (`kubia`) exists and is healthy — created manually to get moving, now being adopted into Terraform (see [docs/terraform-import.md](docs/terraform-import.md)) so all future changes go through CI instead of by hand. GitOps controller not yet chosen or installed; nothing is deployed on the cluster yet.
 
 Track progress in [docs/ROADMAP.md](docs/ROADMAP.md).
 
@@ -44,6 +45,18 @@ Track progress in [docs/ROADMAP.md](docs/ROADMAP.md).
 - A GCP project with billing enabled
 - `gcloud`, `terraform`, and `kubectl` installed locally
 - (Once a GitOps controller is chosen) its CLI, e.g. `argocd` or `flux`
+
+## Applying infrastructure changes
+
+Changes to `terraform/` go through GitHub Actions, not local `terraform apply` — see [docs/github-actions-auth.md](docs/github-actions-auth.md) for the one-time GCP setup this depends on (state bucket + auth).
+
+The flow is:
+
+1. Open a PR touching `terraform/`. CI runs `fmt`, `validate`, and `plan`. **Read the plan.** Nothing has touched GCP at this point.
+2. Merge. `main` re-plans, but still applies nothing.
+3. When you actually want the change to be real: Actions tab → **Terraform** → *Run workflow* → branch `main`. That run plans and then applies.
+
+Applying is manual on purpose — see [the reasoning in ARCHITECTURE.md](docs/ARCHITECTURE.md#state--applying-changes). Short version: the infra layer has no self-correcting controller behind it, and this repo has already lost a live node pool to an apply nobody read first.
 
 ## License
 
