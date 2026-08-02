@@ -13,7 +13,10 @@ Tracks the bootstrap sequence for this repo. Update as phases complete — this 
 - [x] Remote state backend (GCS bucket) created and wired up — versioning + uniform bucket-level access on
 - [x] Existing `kubia` cluster imported into Terraform state (see [terraform-import.md](terraform-import.md)) — one-time, adopts the cluster you already created without recreating it
 - [x] `terraform plan` shows no diff after import — CI reports `No changes. Your infrastructure matches the configuration.`
-- [ ] Test the from-scratch path: destroy `kubia`, let the GitHub Actions pipeline recreate it purely from `terraform/` — proves the repo can rebuild this cluster from nothing
+- [x] Destroy path built: a separate `Terraform Destroy` workflow, dispatch-only, main-only, with a typed confirmation and a GitHub Environment approval gate (see [destroy-recreate.md](destroy-recreate.md))
+- [x] Recreate path unblocked: `import.tf` removed (it fails against empty state) and a `from_scratch` dispatch input added to pass `manage_default_node_pool_removal=true`
+- [ ] Configure the `destroy` GitHub Environment with yourself as a required reviewer — until then the gate exists but enforces nothing
+- [ ] Actually run the test: destroy `kubia`, rebuild it purely from this repo, and record every manual step it turns out to need
 
 ## Phase 2 — GitOps bootstrap
 - [x] Decide ArgoCD vs Flux → **Argo CD** (see [argocd.md](argocd.md) for the reasoning)

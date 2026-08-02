@@ -80,7 +80,15 @@ No data was lost — nothing was deployed on the cluster yet — but it's a clea
    ```
    The first command should list both resources. The second should now say **no changes** — Terraform's cabinet and GCP's reality agree.
 
-7. **Clean up (optional):** `import.tf` is safe to delete once you've confirmed the import worked — it's a one-time bootstrapping aid. Leaving it in place is also fine; on every apply after the first, Terraform sees the resources are already in state and silently skips the import.
+7. **Clean up:** `import.tf` has now been deleted, and this turned out to be less optional than the original note suggested.
+
+   The claim that leaving it in place is "also fine" holds only for as long as the cluster exists. Against **empty** state — which is exactly what the destroy-and-recreate test produces — an `import` block pointing at an object that no longer exists fails the plan outright:
+
+   ```
+   Error: Cannot import non-existent remote object
+   ```
+
+   So the file that made adoption possible is the same file that blocks rebuilding from nothing. It was removed in the commit that added the destroy workflow. If a future import is ever needed — state lost, or a second cluster adopted — the blocks are recoverable from git history, and the reasoning above is the point of keeping this document.
 
 ## After this
 

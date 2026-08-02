@@ -1,0 +1,132 @@
+name: Terraform Destroy
+
+# Deliberately a SEPARATE workflow from terraform.yml, not a mode of it.
+#
+# Destroying is not a variation on applying; it is a different act with a
+# different blast radius, and it deserves its own file, its own dispatch
+# button, and its own guardrails. Folding it into terraform.yml as a flag
+# would put "recreate my cluster" and "delete my cluster" one dropdown
+# selection apart, which is exactly the kind of adjacency that produces
+# accidents.
+#
+# What this destroys: the GKE cluster kubia, its node pool, and the static
+# IP fronting ingress-nginx. Everything running inside the cluster goes with
+# it - Argo CD, ingress-nginx, cert-manager, and every certificate they hold.
+#
+# What survives, because Terraform does not manage it: the GCS state bucket,
+# the terraform-ci service account, the Workload Identity Federation pool and
+# provider, and this repository. That asymmetry is the point - the pipeline
+# that rebuilds the cluster is not itself destroyed by running this.
+#
+# See docs/destroy-recreate.md before running.
+
+on:
+  # Dispatch only. No push trigger, no PR trigger, no schedule. There is no
+  # sequence of ordinary git operations that can cause this to run.
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "plan = show what would be destroyed, change nothing. destroy = actually destroy it."
+        type: choice
+        options:
+          - plan
+          - destroy
+        default: plan
+        required: true
+      confirm:
+        description: "Type the cluster name (kubia) to confirm. Ignored when mode=plan."
+        type: string
+        default: ""
+        required: false
+
+permissions:
+  contents: read
+  id-token: write # Workload Identity Federation
+
+defaults:
+  run:
+    working-directory: terraform
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+
+    # A GitHub Environment. On its own this does nothing; once you add
+    # yourself as a required reviewer under Settings -> Environments ->
+    # destroy, every run of this workflow pauses and waits for an explicit
+    # human approval in the Actions UI before any step executes.
+    #
+    # That is the strongest native guardrail GitHub offers, and it is worth
+    # configuring: it means destroying the cluster requires an approval from
+    # a different screen than the one that launched it.
+    environment: destroy
+
+    steps:
+      # --- Guard 1: branch -------------------------------------------------
+      # workflow_dispatch can target any branch. Destroy runs only from main,
+      # so a stale or experimental branch cannot describe what gets torn down.
+      - name: Guard - must run from main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Destroy may only run from main. Got ${{ github.ref }}."
+          exit 1
+
+      # --- Guard 2: typed confirmation -------------------------------------
+      # A dropdown alone is one misclick. Requiring the cluster name to be
+      # typed means the destructive path cannot be reached without the
+      # operator having written down what they are destroying.
+      - name: Guard - confirmation must match
+        if: inputs.mode == 'destroy'
+        run: |
+          if [ "${{ inputs.confirm }}" != "kubia" ]; then
+            echo "::error::mode=destroy requires confirm=kubia. Got '${{ inputs.confirm }}'."
+            exit 1
+          fi
+          echo "Confirmation accepted. Proceeding to destroy kubia."
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Authenticate to GCP (Workload Identity Federation)
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="prefix=terraform/state"
+
+      # Always plan, in both modes. In plan mode this is the entire job; in
+      # destroy mode it is the record of what was about to happen, saved into
+      # the run log before anything is touched.
+      - name: Terraform Plan (destroy)
+        run: |
+          terraform plan -destroy \
+            -var="project_id=${{ vars.GCP_PROJECT_ID }}" \
+            -no-color
+
+      - name: Terraform Destroy
+        if: inputs.mode == 'destroy'
+        run: |
+          terraform destroy -auto-approve \
+            -var="project_id=${{ vars.GCP_PROJECT_ID }}" \
+            -no-color
+
+      - name: What to do next
+        if: inputs.mode == 'destroy'
+        run: |
+          echo "Cluster destroyed. To rebuild:"
+          echo "  1. Run the Terraform workflow with from_scratch=true."
+          echo "     Without it, GKE's auto-created default-pool collides"
+          echo "     with google_container_node_pool.default_pool."
+          echo "  2. The static IP is gone. A NEW address will be allocated,"
+          echo "     so the argocd.koufan.dev A record at Spaceship must be"
+          echo "     updated before certificates can reissue."
+          echo "  3. Re-bootstrap Argo CD - see docs/argocd.md. Nothing"
+          echo "     in-cluster survives a destroy."

@@ -27,7 +27,15 @@ on:
     paths:
       - "terraform/**"
       - ".github/workflows/terraform.yml"
-  workflow_dispatch: {} # the "apply now" button in the Actions tab — this is the *only* trigger that applies
+  # The "apply now" button in the Actions tab — this is the *only* trigger
+  # that applies.
+  workflow_dispatch:
+    inputs:
+      from_scratch:
+        description: "Rebuilding from nothing after a destroy? Only tick this against genuinely empty state."
+        type: boolean
+        default: false
+        required: false
 
 permissions:
   contents: read
@@ -92,11 +100,24 @@ jobs:
       - name: Terraform Validate
         run: terraform validate
 
+      # `manage_default_node_pool_removal` defaults to false and must stay
+      # false against the existing cluster — true tells the provider to
+      # delete a pool named "default-pool", which on kubia is the real,
+      # running node pool. That combination already destroyed it once; see
+      # docs/terraform-import.md.
+      #
+      # It only becomes correct in one situation: applying against genuinely
+      # empty state after a destroy, where GKE's auto-created default-pool
+      # would otherwise collide with google_container_node_pool.default_pool
+      # on the same name. That is what the from_scratch input is for, and why
+      # it is a dispatch-time choice rather than a committed default — the
+      # right value depends on the state of the world, not on the code.
       - name: Terraform Plan
         id: plan
         run: |
           terraform plan \
             -var="project_id=${{ vars.GCP_PROJECT_ID }}" \
+            -var="manage_default_node_pool_removal=${{ inputs.from_scratch == true }}" \
             -out=tfplan \
             -no-color
 
