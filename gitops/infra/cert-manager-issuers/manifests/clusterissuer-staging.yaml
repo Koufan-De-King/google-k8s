@@ -1,0 +1,29 @@
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    # The STAGING endpoint. Certificates from here are signed by an
+    # authority no browser trusts, which is the entire point: the flow
+    # is identical, the rate limits are generous, and a mistake costs
+    # nothing.
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+ 
+    # Expiry notices go here. Not used for login, no password, no
+    # verification email. It just has to be a real address you read.
+    email: kingkoufan@gmail.com
+ 
+    # Where cert-manager stores the ACME ACCOUNT private key - which is
+    # NOT any certificate key. It identifies you to Lets Encrypt across
+    # requests. cert-manager creates this Secret itself; you never
+    # populate it.
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+ 
+    solvers:
+      # How to prove control. HTTP-01 needs no credentials at all, which
+      # is why no secret is required anywhere in this setup.
+      - http01:
+          ingress:
+            class: nginx   # create challenge Ingress objects for nginx
