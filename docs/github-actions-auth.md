@@ -67,11 +67,20 @@ gcloud iam workload-identity-pools create "github-pool" \
 # A provider inside that pool, trusting GitHub's OIDC issuer specifically,
 # and mapping GitHub's token claims (e.g. which repo it came from) into
 # attributes GCP can check.
+#
+# --attribute-condition is REQUIRED here, and GCP will reject the command
+# without it. The reason is worth understanding rather than pasting past:
+# the issuer (token.actions.githubusercontent.com) is shared by every
+# GitHub Actions run on earth. Trusting the issuer alone would mean any
+# repo's workflow could present a valid token to this pool. The condition
+# is the filter that narrows "GitHub said so" down to "GitHub said so, and
+# it was this specific repo."
 gcloud iam workload-identity-pools providers create-oidc "github-provider" \
   --project="${PROJECT_ID}" --location="global" \
   --workload-identity-pool="github-pool" \
   --display-name="GitHub Actions Provider" \
   --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
+  --attribute-condition="assertion.repository == '${REPO}'" \
   --issuer-uri="https://token.actions.githubusercontent.com"
 
 # Restrict impersonation of the service account to tokens whose
@@ -93,6 +102,33 @@ Repo **variables** to set (Settings → Secrets and variables → Actions → Va
 | `GCP_SERVICE_ACCOUNT` | `${SA_EMAIL}` |
 
 Nothing to add under **Secrets** — that's the point of WIF.
+
+#### Verifying it actually worked
+
+The pool and the provider are separate resources, and it's entirely possible to end up with the pool created and the provider silently missing — which is exactly what happened on the first attempt here, because the `create-oidc` command was run without the required `--attribute-condition` and was rejected. The failure only surfaced much later, on the first CI run.
+
+Check both, rather than assuming:
+
+```sh
+gcloud iam workload-identity-pools list \
+  --location=global --project="${PROJECT_ID}"
+
+gcloud iam workload-identity-pools providers list \
+  --location=global --workload-identity-pool="github-pool" \
+  --project="${PROJECT_ID}"
+```
+
+Both must return a row. An empty provider list with a healthy-looking pool is the failure mode described above, and it produces this on the GitHub side:
+
+```
+failed to generate Google Cloud federated token for
+//iam.googleapis.com/projects/.../providers/github-provider:
+{"error":"invalid_target","error_description":"The target service indicated by
+the \"audience\" parameters is invalid. This might either be because the pool or
+provider is disabled or deleted or because it doesn't exist."}
+```
+
+The error names three possible causes and gives no way to tell them apart from GitHub's side — the two `list` commands above are how you find out which one it is. Note that the project *number* (not ID) in `GCP_WIF_PROVIDER` must also match; a mismatch there produces the same message.
 
 ### Option B — Service account JSON key (simpler, weaker)
 

@@ -42,8 +42,12 @@ jobs:
   terraform:
     runs-on: ubuntu-latest
     steps:
+      # Action majors are pinned to their Node 24 releases. GitHub is
+      # deprecating the Node 20 runtime, and an action still on node20 emits
+      # a deprecation warning on every run — harmless today, a hard failure
+      # once the runtime is removed.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # --- Auth: Workload Identity Federation (recommended, keyless) -------
       # GitHub's OIDC token gets exchanged for short-lived GCP credentials.
@@ -53,7 +57,7 @@ jobs:
       # this (WIF pool, provider, IAM binding) is in
       # docs/github-actions-auth.md.
       - name: Authenticate to GCP (Workload Identity Federation)
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
@@ -67,12 +71,12 @@ jobs:
       # or in terraform/ changes.
       #
       # - name: Authenticate to GCP (service account key)
-      #   uses: google-github-actions/auth@v2
+      #   uses: google-github-actions/auth@v3
       #   with:
       #     credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: "latest" # required_version in versions.tf (>= 1.7.0) is the real guardrail
 
