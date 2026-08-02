@@ -1,0 +1,24 @@
+controller:
+  service:
+    # Pin the load balancer to the address reserved in Terraform. Without
+    # this, GCP hands out an ephemeral address and the DNS record you are
+    # about to create becomes wrong the first time the Service is
+    # recreated.
+    loadBalancerIP: "34.140.41.168"
+    externalTrafficPolicy: Local   # preserves the real client IP
+ 
+  # One replica. Three e2-medium nodes is not the place to run a highly
+  # available ingress tier, and a zonal cluster cannot survive the
+  # failure that redundancy would protect against anyway.
+  replicaCount: 1
+ 
+  ingressClassResource:
+    name: nginx          # the value Ingress objects put in ingressClassName
+    enabled: true
+    default: false       # be explicit. An Ingress must ask for nginx by name.
+ 
+  config:
+    # Let cert-manager HTTP-01 challenges through on plain HTTP while
+    # still redirecting real traffic to HTTPS. ingress-nginx already
+    # special-cases the ACME path, so this stays safe.
+    ssl-redirect: "true"
