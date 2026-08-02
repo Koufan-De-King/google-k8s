@@ -19,7 +19,8 @@ Tracks the bootstrap sequence for this repo. Update as phases complete — this 
 - [x] Decide ArgoCD vs Flux → **Argo CD** (see [argocd.md](argocd.md) for the reasoning)
 - [x] Install the chosen controller into the cluster (this one step is the only manual/imperative install — everything after is declarative)
 - [x] Point it at `gitops/` in this repo — root app-of-apps, `gitops/bootstrap/root.yaml`
-- [x] Argo CD manages its own upgrades and config from `gitops/infra/argocd/`
+- [x] Argo CD manages its own upgrades and config from `gitops/infra/argocd/` — 42 resources, `Synced`/`Healthy`
+- [x] Drift correction verified on Argo CD itself: `kubectl scale` on `argocd-repo-server` 1→2 was reverted in ~2s (`Synced → OutOfSync → OperationCompleted → Synced`). Phase 3 repeats this on a real workload
 - [ ] Retire the `argocd-initial-admin-secret` local admin once Keycloak is issuing logins
 
 ## Phase 2.5 — Keycloak as OIDC provider

@@ -55,7 +55,9 @@ kubectl apply -f gitops/bootstrap/root.yaml
 
 `--server-side` on step 2 is not optional: Argo CD's CRDs exceed the 256KB annotation limit that client-side apply relies on, and a plain `kubectl apply` fails with `metadata.annotations: Too long`. The self-management Application sets `ServerSideApply=true` for the same reason.
 
-Step 4 is the handover. The root app finds `gitops/infra/argocd/application.yaml`, creates an `argocd` Application from it, and that Application renders the identical chart and values. It should report `Synced` almost immediately, having found nothing to change.
+Step 4 is the handover. The root app finds `gitops/infra/argocd/application.yaml`, creates an `argocd` Application from it, and that Application renders the identical chart and values. Expect it to sit at `OutOfSync` for up to a minute before settling on `Synced` — the first reconcile has to fetch the chart and compare 42 resources.
+
+One thing that looks alarming and isn't: the `argocd-redis-secret-init` Job disappears. The chart marks it as a Helm hook with a delete policy, and Argo CD honours Helm hooks as its own sync hooks — so it runs the Job and then cleans it up. The `argocd-redis` secret it generates persists, which is the part that matters. `kubectl -n argocd get job` returning nothing is the expected steady state.
 
 ### If `helm repo add` can't reach argoproj.github.io
 
