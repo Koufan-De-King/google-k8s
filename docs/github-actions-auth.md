@@ -34,20 +34,43 @@ gcloud iam service-accounts create terraform-ci \
 
 SA_EMAIL="terraform-ci@${PROJECT_ID}.iam.gserviceaccount.com"
 
-# Roles it needs: manage GKE clusters/node pools, act as itself when
-# GKE creates resources on its behalf, and read compute metadata.
+# Manage GKE clusters and node pools.
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
   --member="serviceAccount:${SA_EMAIL}" --role="roles/container.admin"
 
+# Act as itself when GKE creates resources on its behalf.
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
   --member="serviceAccount:${SA_EMAIL}" --role="roles/iam.serviceAccountUser"
 
+# Read compute metadata (instance groups behind the node pool, etc).
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
   --member="serviceAccount:${SA_EMAIL}" --role="roles/compute.viewer"
+
+# Create and manage networking resources — static IPs, and later anything
+# else the ingress layer needs. compute.viewer above is read-only and is
+# NOT sufficient; see the note below.
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+  --member="serviceAccount:${SA_EMAIL}" --role="roles/compute.networkAdmin"
 
 # Access to the state bucket specifically.
 gsutil iam ch "serviceAccount:${SA_EMAIL}:roles/storage.objectAdmin" "gs://${BUCKET}"
 ```
+
+### On `compute.networkAdmin`, and how it got added
+
+It wasn't in the original set, and the first `terraform apply` that tried to reserve a static IP for ingress-nginx failed on it:
+
+```
+Error 403: Required 'compute.addresses.create' permission for
+'projects/.../regions/europe-west1/addresses/ingress-nginx-ip'
+Reason: forbidden, Message: Required 'compute.addresses.setLabels' permission
+```
+
+The service account had been scoped for exactly one job — run GKE — and reserving an address is a different job. `roles/compute.viewer` is read-only, so it could see addresses and not create them.
+
+`roles/compute.networkAdmin` carries both permissions the error named (`compute.addresses.create` and `compute.addresses.setLabels`) and covers networking generally, without granting control over VMs or disks the way `roles/compute.admin` would. Narrower still would be a custom role holding only `compute.addresses.*`; that's the tighter answer and costs an extra resource to maintain. `networkAdmin` is the proportionate choice for a single-operator cluster.
+
+The failure itself is worth keeping rather than tidying away. This service account is the one credential CI holds, and it is deliberately not project-owner, which means expanding what the pipeline can do is a visible, deliberate act rather than something that silently already worked. A 403 on a new resource type is that design functioning, not a misconfiguration.
 
 From here, pick one:
 
