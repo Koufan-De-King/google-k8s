@@ -12,7 +12,7 @@
 # and Keycloak land; see the note on configs.cm below for why it matters more
 # than it looks.
 global:
-  domain: argocd.example.com
+  domain: argocd.koufan.dev
 
 configs:
   params:
@@ -100,6 +100,16 @@ controller:
   replicas: 1
 server:
   replicas: 1
+  ingress:
+    enabled: true
+    controller: generic          # generic = a standard Ingress object
+    ingressClassName: nginx
+    tls: true                    # emits the spec.tls block
+    annotations:
+      # THIS is what triggers everything. cert-manager watches Ingress
+      # objects for this annotation and creates a Certificate from the
+      # spec.tls block automatically.
+      cert-manager.io/cluster-issuer: letsencrypt-staging
 repoServer:
   replicas: 1
 applicationSet:
