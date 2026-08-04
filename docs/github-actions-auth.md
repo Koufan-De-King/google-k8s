@@ -1,8 +1,28 @@
 # GitHub Actions → GCP: state bucket + authentication
 
-Two things need to exist in GCP *before* `.github/workflows/terraform.yml` can run: a place for remote state to live, and a way for GitHub Actions to authenticate. Both are one-time, manual setup — chicken-and-egg, since Terraform can't create the very backend it needs in order to run.
+Three things need to exist in GCP *before* `.github/workflows/terraform.yml` can run: a place for remote state to live, a way for GitHub Actions to authenticate, and one API that Terraform needs in order to manage APIs. All are one-time, manual setup — chicken-and-egg, since Terraform can't create the very things it needs in order to run.
 
 Run everything below locally, once, with `gcloud` authenticated as yourself (you already have this, from creating the cluster).
+
+## 0. The Cloud Resource Manager API
+
+```sh
+PROJECT_ID="your-gcp-project-id"
+
+gcloud services enable cloudresourcemanager.googleapis.com --project="${PROJECT_ID}"
+```
+
+The Google provider uses this API for project-level reads. Without it, any `google_project_service` resource fails at apply time — *after* enabling the service it was asked to enable — with:
+
+```
+Error when reading or editing Project Service .../secretmanager.googleapis.com:
+Error 403: Cloud Resource Manager API has not been used in project ... or it is disabled.
+reason: SERVICE_DISABLED
+```
+
+Note the ordering in that failure, because it is genuinely instructive: Terraform enabled `secretmanager.googleapis.com` successfully, then failed reading it back, and the resource never entered state. **A failed `terraform apply` is not necessarily a no-op.** The earlier permission failures in this project errored before touching anything; this one did half the job and then reported failure. Always check real state after a failed apply rather than assuming nothing happened.
+
+This one API cannot itself be managed by Terraform, for the obvious reason. It joins the state bucket and the service account on the list of things that must exist before the pipeline that manages everything else can run at all.
 
 ## 1. Remote state bucket
 
