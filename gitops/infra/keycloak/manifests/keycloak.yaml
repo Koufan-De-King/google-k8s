@@ -1,0 +1,91 @@
+# -----------------------------------------------------------------------------
+# The Keycloak instance
+# -----------------------------------------------------------------------------
+# A custom resource, not a Deployment. The operator watches this object and
+# creates the StatefulSet, Service, Ingress and everything else from it. What
+# is written here is intent; the operator owns the mechanics.
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: Keycloak
+metadata:
+  name: keycloak
+  namespace: keycloak
+spec:
+  instances: 1
+
+  db:
+    vendor: postgres
+    # The headless Service in postgres.yaml. Same namespace, so the short name
+    # resolves.
+    host: keycloak-postgres
+    port: 5432
+    database: keycloak
+    # Both point at the Secret ESO generates. Keycloak and Postgres read the
+    # same credential from the same place rather than holding two copies.
+    usernameSecret:
+      name: keycloak-db
+      key: username
+    passwordSecret:
+      name: keycloak-db
+      key: password
+
+  # The full external URL, not a bare hostname. Keycloak 26 uses "hostname v2",
+  # where this value is what Keycloak believes it is reachable at, and it ends
+  # up in issuer URLs, discovery documents and OIDC redirects.
+  #
+  # This is the same class of setting as global.domain on Argo CD, and it fails
+  # the same way when wrong: tokens are issued with an issuer nobody can reach,
+  # and the error surfaces at the client rather than here.
+  hostname:
+    hostname: https://keycloak.koufan.dev
+
+  # Serve plain HTTP from the pod. Identical reasoning to Argo CD's
+  # server.insecure — TLS terminates at ingress-nginx one hop earlier, on a
+  # real Let's Encrypt certificate. Running TLS here too would mean a
+  # self-signed certificate that nginx must be told not to verify.
+  http:
+    httpEnabled: true
+
+  # Because TLS terminates upstream, Keycloak sees plain HTTP on the wire and
+  # would otherwise conclude it is being accessed over HTTP — generating
+  # http:// redirect URLs that break the OIDC flow. This tells it to trust
+  # X-Forwarded-* headers from the ingress and reconstruct the real scheme.
+  #
+  # `xforwarded` is correct for ingress-nginx. It is a security-relevant
+  # setting: it means Keycloak trusts those headers, which is only safe
+  # because nothing can reach the pod except through the ingress.
+  proxy:
+    headers: xforwarded
+
+  # The operator creates and manages the Ingress itself, so there is no
+  # separate Ingress manifest here. cert-manager sees the annotation, issues a
+  # certificate for the host, and writes it into keycloak-tls — exactly the
+  # flow already proven for argocd.koufan.dev.
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+    tlsSecret: keycloak-tls
+
+  # Created by the keycloak-admin ExternalSecret. The operator requires the
+  # Secret to carry `username` and `password` keys.
+  #
+  # "bootstrap" is meant literally: this account exists to create the first
+  # real admin and should be removed afterwards. Keycloak logs a warning while
+  # it remains in use.
+  bootstrapAdmin:
+    user:
+      secret: keycloak-admin
+
+  resources:
+    # Sized against real headroom. Each node has ~940m allocatable CPU and is
+    # already 67-77% requested, leaving roughly 750m across the cluster;
+    # Postgres takes 100m of it. Memory is the comfortable dimension here
+    # (~1.8Gi free per node) and CPU is the tight one, which is the opposite
+    # of what a JVM workload suggests.
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      cpu: "1"
+      memory: 2Gi

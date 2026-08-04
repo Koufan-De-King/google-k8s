@@ -1,0 +1,62 @@
+# -----------------------------------------------------------------------------
+# The Keycloak Operator
+# -----------------------------------------------------------------------------
+# Unlike every other component here, this one is not a Helm chart. The Keycloak
+# project publishes its operator as plain manifests plus a kustomization.yml in
+# its own git repository, and Argo CD speaks Kustomize natively — so this
+# Application points straight at that repository at a pinned tag.
+#
+# Nothing is vendored into this repo. The upstream tag is the version pin, and
+# bumping it is a one-line diff here, exactly like bumping a chart's
+# targetRevision. Copying the manifests in would mean re-copying them on every
+# upgrade and losing the provenance.
+#
+# Why the operator rather than a Helm chart:
+#
+# A chart would install Keycloak and stop there. Everything after that — realms,
+# clients, roles — would be configured by clicking in the admin console, which
+# means the most important state in the system would live nowhere but inside
+# Keycloak's database. That is precisely the failure this repo exists to avoid,
+# and it is the same shape as the orphaned hello-world LoadBalancer: real
+# configuration that no file describes.
+#
+# The operator ships CRDs for Keycloak, KeycloakRealmImport, KeycloakOIDCClient
+# and KeycloakSAMLClient. That last pair matters immediately: the OIDC client
+# Argo CD will authenticate against becomes a YAML file in this repo rather
+# than a form someone filled in once.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: keycloak-operator
+  namespace: argocd
+  annotations:
+    # Before the Keycloak CR in gitops/infra/keycloak (wave 3). The CRDs this
+    # installs must exist before anything can create a Keycloak object.
+    argocd.argoproj.io/sync-wave: "1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/keycloak/keycloak-k8s-resources.git
+    targetRevision: 26.7.0
+    path: kubernetes
+
+  destination:
+    server: https://kubernetes.default.svc
+    # The upstream kustomization.yml hardcodes `namespace: keycloak` and
+    # applies a NamespaceTransformer, so this must match or the RoleBindings
+    # will point at a namespace nothing is deployed into.
+    namespace: keycloak
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # Fourth component to need this. The Keycloak CRDs are large enough to
+      # overflow the 256KB last-applied-configuration annotation that
+      # client-side apply depends on.
+      - ServerSideApply=true

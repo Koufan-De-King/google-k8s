@@ -1,0 +1,151 @@
+# -----------------------------------------------------------------------------
+# PostgreSQL for Keycloak
+# -----------------------------------------------------------------------------
+# Hand-written rather than pulled from a chart, for two reasons. The obvious
+# candidate (Bitnami) moved its Debian images to a `bitnamilegacy` registry, so
+# its chart references tags that may not pull. And at this size a StatefulSet
+# is about sixty lines — reading them is more useful than reading a chart's
+# values schema.
+#
+# READ THIS BEFORE RELYING ON IT:
+#
+# This is the first component in this repository with state that git cannot
+# rebuild. Argo CD, ingress-nginx, cert-manager and ESO are all reconstructible
+# from these files alone — delete them and they come back identical. Keycloak's
+# realms, users, clients and sessions live in this database, and nothing here
+# describes them.
+#
+# Concretely, that means the destroy-and-recreate test in docs/ROADMAP.md
+# destroys this data. The PersistentVolumeClaim is backed by a zonal GCE
+# persistent disk in europe-west1-b, and `terraform destroy` takes the cluster
+# and the disk with it. There is a roadmap item for backups; until it is done,
+# treat anything configured in Keycloak as disposable.
+#
+# The mitigation that fits this repo's premise is KeycloakRealmImport: realm
+# configuration expressed as a CR in git, so the *configuration* is rebuildable
+# even though the *runtime data* (sessions, user-set passwords) is not.
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak-postgres
+  namespace: keycloak
+spec:
+  # Headless: a StatefulSet member is addressed by a stable DNS name rather
+  # than load-balanced across. With one replica this is mostly a formality,
+  # but it is the correct shape and costs nothing.
+  clusterIP: None
+  selector:
+    app: keycloak-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: keycloak-postgres
+  namespace: keycloak
+spec:
+  serviceName: keycloak-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak-postgres
+
+  # By default a StatefulSet's PersistentVolumeClaims outlive the StatefulSet
+  # itself. Kubernetes declines to delete data on your behalf, so deleting this
+  # workload would leave the PVC — and the disk behind it — in place, and a
+  # later reinstall would silently reattach to the old database.
+  #
+  # That default is a safety net and also a lie about where state lives: the
+  # repo would claim to describe the cluster while a volume nobody declared
+  # survived every delete. This makes deletion mean what it says.
+  #
+  # whenDeleted: Delete  — removing the StatefulSet removes the PVC. The
+  #   standard-rwo StorageClass has reclaimPolicy Delete, so the PersistentVolume
+  #   and the underlying GCE disk go with it. Nothing outlasts the workload.
+  #
+  # whenScaled: Retain   — scaling to zero is an ordinary operational act, not
+  #   an instruction to destroy data. Deleting on scale-down would make
+  #   `kubectl scale --replicas=0` a data-loss command, which nobody expects.
+  #
+  # CONSEQUENCE, stated plainly: deleting gitops/infra/keycloak/ from git now
+  # destroys the Keycloak database. Argo CD prunes the StatefulSet, the PVC
+  # follows, the disk follows. That is the intended behaviour — every realm,
+  # user and client is gone. Back up before removing this directory.
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Delete
+    whenScaled: Retain
+  template:
+    metadata:
+      labels:
+        app: keycloak-postgres
+    spec:
+      containers:
+        - name: postgres
+          # Official image from Docker Hub's library namespace. Not Bitnami,
+          # deliberately — see the note at the top of this file.
+          image: postgres:16.10-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: keycloak
+            # Both of these come from the Secret that ESO generates from GCP
+            # Secret Manager. Neither value appears in this repo.
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db
+                  key: password
+            # The official image mounts its volume at /var/lib/postgresql/data,
+            # but that directory is the mount point itself. Initialising a
+            # cluster directly into a mount point fails on some volume types
+            # because of the lost+found entry, so the data directory is a
+            # subdirectory of it. This is the single most common reason a
+            # postgres StatefulSet crashloops on first start.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            # Modest on purpose. The cluster is three e2-medium nodes with
+            # roughly 940m allocatable CPU each, already 67-77% requested by
+            # existing workloads. Requests are a scheduling reservation, not a
+            # cap — asking for more than needed here would risk Keycloak
+            # itself being unschedulable.
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "keycloak", "-d", "keycloak"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "keycloak", "-d", "keycloak"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # standard-rwo is the cluster default: a pd-balanced disk. 8Gi against
+        # 100GB of remaining free-tier quota (150GB of 250GB is already used by
+        # the three node boot disks).
+        storageClassName: standard-rwo
+        resources:
+          requests:
+            storage: 8Gi

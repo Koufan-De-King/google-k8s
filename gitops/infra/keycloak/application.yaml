@@ -1,0 +1,66 @@
+# -----------------------------------------------------------------------------
+# Keycloak: the database, its secrets, and the Keycloak CR
+# -----------------------------------------------------------------------------
+# Separate from gitops/infra/keycloak-operator on purpose. That Application
+# installs the operator and its CRDs from the upstream repository; this one
+# holds the instance we actually want. Splitting them means the operator can be
+# upgraded independently of the deployment it manages, and it makes the sync
+# ordering explicit rather than implicit.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: keycloak
+  namespace: argocd
+  annotations:
+    # Wave 3, after:
+    #   1  keycloak-operator      (installs the Keycloak CRD)
+    #   1  external-secrets       (installs the ExternalSecret CRD)
+    #   2  external-secrets-config (the ClusterSecretStore these reference)
+    #
+    # Applying a Keycloak object before its CRD exists fails outright, and an
+    # ExternalSecret with no store reports an error until one appears. Waves
+    # order the initial creation; after that Argo CD retries on its own, so a
+    # wave being briefly wrong is self-correcting rather than fatal.
+    argocd.argoproj.io/sync-wave: "3"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/Koufan-De-King/google-k8s.git
+    targetRevision: main
+    path: gitops/infra/keycloak/manifests
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: keycloak
+
+  syncPolicy:
+    automated:
+      # prune here is genuinely destructive, unlike every other component in
+      # this repo.
+      #
+      # The PersistentVolumeClaim behind Postgres is created by the
+      # StatefulSet's volumeClaimTemplate, and Kubernetes would ordinarily
+      # retain it after the StatefulSet is deleted — declining to destroy data
+      # on your behalf. postgres.yaml overrides that with
+      # persistentVolumeClaimRetentionPolicy.whenDeleted: Delete, and the
+      # standard-rwo StorageClass reclaims with Delete, so the chain runs all
+      # the way down:
+      #
+      #   remove this directory from git
+      #     -> Argo CD prunes the StatefulSet
+      #        -> the PVC is deleted
+      #           -> the PersistentVolume is deleted
+      #              -> the GCE disk is deleted
+      #
+      # Deliberate. It keeps the repo honest — no volume nobody declared
+      # quietly surviving every delete — at the cost of making `git rm` on this
+      # directory a data-loss operation. Every realm, user and client goes with
+      # it. Back up first.
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

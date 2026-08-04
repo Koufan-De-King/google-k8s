@@ -35,6 +35,8 @@ Tracks the bootstrap sequence for this repo. Update as phases complete — this 
 - [ ] Deploy Keycloak via `gitops/infra/keycloak/` — needs its own hostname, ingress and certificate, all of which the Phase 4 machinery now provides for the cost of one annotation
 - [ ] Point Argo CD at Keycloak: `configs.cm.oidc.config`, `configs.rbac.policy.csv` (`global.domain` is already correct)
 - [ ] Consider a reloader so rotating a secret actually restarts its consumers — ESO updates the Secret, but nothing restarts on its own
+- [ ] **Back up Keycloak's database.** It is the first state in this repo that git cannot rebuild, and the PVC is now set to delete with the StatefulSet, so there is no accidental safety net. Options: a `pg_dump` CronJob to a GCS bucket, or GCE persistent-disk snapshots
+- [ ] Express realms and clients as `KeycloakRealmImport` / `KeycloakOIDCClient` CRs — this is what keeps identity *configuration* reproducible even though runtime data (sessions, user-set passwords) is not
 
 ## Phase 3 — First real workload
 - [ ] Deploy one trivial app (e.g. a static site or hello-world container) through `gitops/apps/`
