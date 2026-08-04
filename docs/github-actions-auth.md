@@ -52,6 +52,13 @@ gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
   --member="serviceAccount:${SA_EMAIL}" --role="roles/compute.networkAdmin"
 
+# Enable and disable project APIs, so `google_project_service` resources
+# work. Enabling an API is a project-level operation with its own
+# permission (serviceusage.services.enable); none of the roles above
+# include it.
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+  --member="serviceAccount:${SA_EMAIL}" --role="roles/serviceusage.serviceUsageAdmin"
+
 # Access to the state bucket specifically.
 gsutil iam ch "serviceAccount:${SA_EMAIL}:roles/storage.objectAdmin" "gs://${BUCKET}"
 ```
@@ -71,6 +78,34 @@ The service account had been scoped for exactly one job — run GKE — and rese
 `roles/compute.networkAdmin` carries both permissions the error named (`compute.addresses.create` and `compute.addresses.setLabels`) and covers networking generally, without granting control over VMs or disks the way `roles/compute.admin` would. Narrower still would be a custom role holding only `compute.addresses.*`; that's the tighter answer and costs an extra resource to maintain. `networkAdmin` is the proportionate choice for a single-operator cluster.
 
 The failure itself is worth keeping rather than tidying away. This service account is the one credential CI holds, and it is deliberately not project-owner, which means expanding what the pipeline can do is a visible, deliberate act rather than something that silently already worked. A 403 on a new resource type is that design functioning, not a misconfiguration.
+
+### The same thing happened again, which makes it a pattern
+
+Adding `google_project_service.secretmanager` failed the same way:
+
+```
+Error 403: Permission denied to enable service [secretmanager.googleapis.com]
+reason: AUTH_PERMISSION_DENIED, domain: serviceusage.googleapis.com
+```
+
+`roles/serviceusage.serviceUsageAdmin` was the fix, since enabling an API is a project-level operation with its own permission that none of the compute or container roles include.
+
+Twice is enough to state the rule rather than keep rediscovering it:
+
+> **This service account starts with no permission for any resource type it has not already managed.** Before adding a new `google_*` resource to `terraform/`, work out which permission it needs and whether `terraform-ci` has it. The plan will not tell you — a plan only reads, and reading is generally already permitted. The 403 arrives at apply time, after the plan looked perfect.
+
+That is the cost of a least-privilege CI credential, and it is a cost worth paying. The alternative is granting `roles/editor` once and never thinking about it again, which also means never noticing when the pipeline quietly gains the ability to delete things nobody intended it to touch.
+
+Current roles, for reference when adding the next resource type:
+
+| Role | Covers |
+|---|---|
+| `roles/container.admin` | GKE clusters and node pools |
+| `roles/iam.serviceAccountUser` | Acting as itself when GKE creates resources |
+| `roles/compute.viewer` | Reading compute resources |
+| `roles/compute.networkAdmin` | Addresses, and networking generally |
+| `roles/serviceusage.serviceUsageAdmin` | Enabling and disabling project APIs |
+| `roles/storage.objectAdmin` on the state bucket | Terraform state |
 
 From here, pick one:
 
