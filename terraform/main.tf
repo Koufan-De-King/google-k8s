@@ -79,6 +79,19 @@ resource "google_container_cluster" "kubia" {
   lifecycle {
     ignore_changes = [initial_node_count]
   }
+
+  # Makes this cluster an OIDC identity provider that GCP trusts, and
+  # establishes the workload pool. The pool name is not a free choice -
+  # it is always PROJECT_ID.svc.id.goog.
+  #
+  # Cluster-level only. On its own this changes nothing for pods; the
+  # node pool setting below is what actually routes credential requests
+  # per-pod. Enabling one without the other is the most common way to end
+  # up with Workload Identity that silently does not work.
+  workload_identity_config {
+    workload_pool = "${var.project_id}.svc.id.goog"
+  }
+
 }
 
 # -----------------------------------------------------------------------------
@@ -110,6 +123,19 @@ resource "google_container_node_pool" "default_pool" {
       "https://www.googleapis.com/auth/servicecontrol",
       "https://www.googleapis.com/auth/trace.append",
     ]
+
+    # Replaces the per-NODE credential endpoint with a per-POD one.
+    #
+    # Without this, any pod can reach the node metadata server and obtain
+    # the node service account credentials - which are broader than any
+    # single workload should hold. This is a security improvement in its
+    # own right, independent of ESO.
+    #
+    # THIS IS THE FIELD THAT ROLLS YOUR NODES.
+    workload_metadata_config {
+      mode = "GKE_METADATA"
+    }
+
   }
 
   management {
