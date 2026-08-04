@@ -27,10 +27,14 @@ Tracks the bootstrap sequence for this repo. Update as phases complete — this 
 - [ ] Retire the `argocd-initial-admin-secret` local admin once Keycloak is issuing logins — **more urgent now that the UI is on the public internet**, see Phase 4
 
 ## Phase 2.5 — Keycloak as OIDC provider
-- [ ] Deploy Keycloak via `gitops/infra/keycloak/`
-- [ ] Decide how secrets reach the cluster (sealed-secrets / external-secrets / by hand) — blocks the Argo CD client secret
-- [ ] Point Argo CD at Keycloak: `configs.cm.oidc.config`, `configs.rbac.policy.csv` (`global.domain` is already correct)
 - [x] Prerequisite: a real hostname + TLS — done, this pulled Phase 4 forward
+- [x] Decide how secrets reach the cluster → **External Secrets Operator + GCP Secret Manager**, authenticated by Workload Identity
+- [x] Workload Identity enabled on the cluster and node pool (`terraform/main.tf`) — no long-lived credential anywhere in the chain
+- [x] ESO deployed (`gitops/infra/external-secrets/`) with `ClusterSecretStore` and the first `ExternalSecret` (`gitops/infra/external-secrets-config/`)
+- [x] `ARGOCD_CLIENT_SECRET` flowing from Secret Manager into the `argocd-oidc-secret` Kubernetes Secret, verified by hash
+- [ ] Deploy Keycloak via `gitops/infra/keycloak/` — needs its own hostname, ingress and certificate, all of which the Phase 4 machinery now provides for the cost of one annotation
+- [ ] Point Argo CD at Keycloak: `configs.cm.oidc.config`, `configs.rbac.policy.csv` (`global.domain` is already correct)
+- [ ] Consider a reloader so rotating a secret actually restarts its consumers — ESO updates the Secret, but nothing restarts on its own
 
 ## Phase 3 — First real workload
 - [ ] Deploy one trivial app (e.g. a static site or hello-world container) through `gitops/apps/`
