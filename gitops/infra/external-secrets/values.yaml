@@ -1,0 +1,16 @@
+# Unlike the cert-manager chart, this one installs its CRDs by default.
+# Stated explicitly rather than relied on, since the two charts differ and
+# that difference is exactly the kind of thing that wastes an afternoon.
+installCRDs: true
+ 
+crds:
+  createClusterSecretStore: true   # we use a cluster-scoped store
+ 
+# The KSA whose name appears in the principal:// binding in step 4.
+# create: true is the chart default and produces a KSA named after the
+# release. Do NOT add an iam.gke.io/gcp-service-account annotation - that
+# is the older impersonation style and is not used here.
+serviceAccount:
+  create: true
+ 
+replicaCount: 1
