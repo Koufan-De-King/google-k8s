@@ -80,7 +80,7 @@ configs:
     # here can be made to match.
     oidc.config: |
       name: Keycloak
-      issuer: https://keycloak.koufan.dev/realms/homelab
+      issuer: https://auth.koufan.dev/realms/homelab
       clientID: argocd
       clientSecret: $argocd-oidc-secret:clientSecret
       # NOTE "groups" is deliberately NOT requested here, even though RBAC

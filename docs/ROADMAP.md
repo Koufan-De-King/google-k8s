@@ -32,11 +32,13 @@ Tracks the bootstrap sequence for this repo. Update as phases complete — this 
 - [x] Workload Identity enabled on the cluster and node pool (`terraform/main.tf`) — no long-lived credential anywhere in the chain
 - [x] ESO deployed (`gitops/infra/external-secrets/`) with `ClusterSecretStore` and the first `ExternalSecret` (`gitops/infra/external-secrets-config/`)
 - [x] `ARGOCD_CLIENT_SECRET` flowing from Secret Manager into the `argocd-oidc-secret` Kubernetes Secret, verified by hash
-- [ ] Deploy Keycloak via `gitops/infra/keycloak/` — needs its own hostname, ingress and certificate, all of which the Phase 4 machinery now provides for the cost of one annotation
-- [ ] Point Argo CD at Keycloak: `configs.cm.oidc.config`, `configs.rbac.policy.csv` (`global.domain` is already correct)
+- [x] Deploy Keycloak via `gitops/infra/keycloak/` — Postgres, ESO-fed secrets, ingress and certificate
+- [x] Point Argo CD at Keycloak — login working end to end, `argocd-admins` group mapped to `role:admin` via the `groups` claim
+- [x] Operator removed. Keycloak now runs as a plain Deployment (`gitops/infra/keycloak/manifests/keycloak-deployment.yaml`), reclaiming the 300m the operator reserved
 - [ ] Consider a reloader so rotating a secret actually restarts its consumers — ESO updates the Secret, but nothing restarts on its own
 - [ ] **Back up Keycloak's database.** It is the first state in this repo that git cannot rebuild, and the PVC is now set to delete with the StatefulSet, so there is no accidental safety net. Options: a `pg_dump` CronJob to a GCS bucket, or GCE persistent-disk snapshots
-- [ ] Express realms and clients as `KeycloakRealmImport` / `KeycloakOIDCClient` CRs — this is what keeps identity *configuration* reproducible even though runtime data (sessions, user-set passwords) is not
+- [x] Decided: realm and client configuration is managed **by hand in the Keycloak admin console**. The declarative CR path was tried and abandoned — see [gitops/infra/keycloak/realm-reference/README.md](../gitops/infra/keycloak/realm-reference/README.md)
+- [ ] **Keycloak is the one place this repo is not the source of truth.** Realms, clients, groups and users live only in Postgres. A rebuild brings Keycloak back empty and Argo CD login breaks. Cheapest fix is a periodic realm export committed to `realm-reference/`; next cheapest is the `pg_dump` backup already listed above
 
 ## Phase 3 — First real workload
 - [ ] Deploy one trivial app (e.g. a static site or hello-world container) through `gitops/apps/`
@@ -47,10 +49,10 @@ Pulled forward ahead of Phase 3, because Keycloak needs a real hostname and TLS 
 
 - [x] Static external IP reserved in Terraform (`terraform/network.tf`) — `34.140.41.168`, so DNS can point somewhere that outlives any Kubernetes object
 - [x] Ingress controller — ingress-nginx via `gitops/infra/ingress-nginx/`, pinned to that IP
-- [x] DNS — `argocd.koufan.dev` A record at Spaceship (registrar-managed; koufan.dev is not in Cloud DNS)
+- [x] DNS — `argocd.koufan.dev` and `auth.koufan.dev` A records at Spaceship (registrar-managed; koufan.dev is not in Cloud DNS)
 - [x] cert-manager for TLS — `gitops/infra/cert-manager/`, with Let's Encrypt issuers in `gitops/infra/cert-manager-issuers/`
 - [x] Argo CD served at https://argocd.koufan.dev on a real Let's Encrypt certificate, auto-renewing
-- [ ] **Decide how to protect the publicly-reachable Argo CD UI** — it is now on the open internet with a static admin password. Options: leave it until Keycloak lands, restrict by source IP at the ingress, or put it behind auth sooner
+- [x] Protect the publicly-reachable Argo CD UI — resolved by Keycloak OIDC; authorisation is by group membership, and unmapped identities get `policy.default: role:readonly`
 - [ ] Basic observability (metrics-server at minimum) — **note this will not currently schedule**, see below
 
 ## Phase 4.5 — The cluster is out of CPU
@@ -59,7 +61,7 @@ Adding Keycloak exposed a hard limit. Three e2-medium nodes give ~2820m allocata
 The cluster now sits at roughly 99% CPU *requested*. Actual utilisation is far lower, but the scheduler works on requests, so the next component simply will not schedule.
 
 - [x] Short-term: Keycloak's CPU request lowered from 250m to 150m so it fits
-- [ ] The Keycloak operator requests 300m — more than Keycloak itself. Patch it down with a Kustomize overlay over the upstream base
+- [x] The Keycloak operator's 300m reclaimed by removing the operator entirely, rather than patching it down
 - [ ] Decide the real fix:
   - **Add a 4th e2-medium node** — +50GB disk (200GB of the 250GB quota), most incremental
   - **Move to e2-standard-2** (2 vCPU per node) — replaces every node, roughly doubles CPU, costs more

@@ -1,0 +1,196 @@
+# -----------------------------------------------------------------------------
+# Keycloak, without the operator
+# -----------------------------------------------------------------------------
+# This replaces the Keycloak CR and the operator that reconciled it. The reason
+# is resource, not taste: the operator requested 300m CPU — double what
+# Keycloak itself asks for — on a cluster that had essentially none left. It
+# was the largest single reclaimable allocation in the cluster.
+#
+# What is lost: the CR-based config layer (KeycloakRealmImport,
+# KeycloakOIDCClient). In practice that layer never worked here — the client CR
+# needed an Experimental server feature that threw a NullPointerException,
+# realm import runs with --override=false so it cannot update an existing
+# realm, and spec.placeholders silently fails because the operator never sets
+# the JVM property that enables substitution. See the git history.
+#
+# What is NOT lost: everything inside Keycloak. The homelab realm, the argocd
+# client, both groups, the group-membership mapper and the user all live in
+# Postgres, which the operator never owned. Removing the operator removes
+# Kubernetes objects, not Keycloak data.
+#
+# The realm's declarative description is kept, unapplied, in
+# gitops/infra/keycloak/realm-reference/ so it is still in git for a future
+# keycloak-config-cli Job — which is the tool that actually solves idempotent
+# realm configuration.
+#
+# Every value below was read off the operator-generated StatefulSet that was
+# working, rather than reconstructed from documentation.
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: keycloak
+spec:
+  selector:
+    app: keycloak
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    # Keycloak serves health and metrics on a separate management port. The
+    # probes below use it, and keeping it off the Ingress means /health is not
+    # exposed to the internet.
+    - name: management
+      port: 9000
+      targetPort: 9000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: keycloak
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:26.7.0
+          args:
+            - --verbose
+            - start
+          env:
+            # The public URL Keycloak believes it is reachable at. This ends up
+            # in the OIDC issuer, the discovery document and every redirect, so
+            # it must match Argo CD's oidc.config issuer character for
+            # character.
+            - name: KC_HOSTNAME
+              value: https://auth.koufan.dev
+
+            # Serve plain HTTP. TLS terminates at ingress-nginx, exactly as
+            # with Argo CD's server.insecure.
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_HTTP_PORT
+              value: "8080"
+
+            # Trust X-Forwarded-* from the ingress so Keycloak reconstructs the
+            # real scheme. Without this it sees plain HTTP and advertises an
+            # http:// issuer, which breaks every OIDC client while looking
+            # fine from inside the cluster.
+            - name: KC_PROXY_HEADERS
+              value: xforwarded
+
+            - name: KC_DB
+              value: postgres
+            - name: KC_DB_URL_HOST
+              value: keycloak-postgres
+            - name: KC_DB_URL_PORT
+              value: "5432"
+            - name: KC_DB_URL_DATABASE
+              value: keycloak
+            - name: KC_DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db
+                  key: username
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db
+                  key: password
+
+            # Single replica, so the embedded Infinispan cache has nobody to
+            # cluster with. `local` drops the jgroups discovery the operator
+            # configured, which on a one-pod deployment is pure overhead.
+            - name: KC_CACHE
+              value: local
+
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+
+            # Only consulted when the database is empty. The realm and users
+            # already exist, so this account is effectively dormant — kept
+            # because losing it would mean no way back into the master realm.
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-admin
+                  key: username
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-admin
+                  key: password
+
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 9000
+
+          # Keycloak runs an augmentation step on start, so first boot is slow.
+          # The startup probe allows up to ten minutes before the liveness
+          # probe begins; without it, liveness kills the pod mid-startup and it
+          # never comes up.
+          startupProbe:
+            httpGet:
+              path: /health/started
+              port: 9000
+            periodSeconds: 5
+            failureThreshold: 120
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 9000
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 9000
+            periodSeconds: 10
+
+          resources:
+            # Same as under the operator. CPU is the scarce dimension on three
+            # e2-medium nodes; the request is a reservation and the limit is
+            # what the JVM may actually burst to.
+            requests:
+              cpu: 150m
+              memory: 1Gi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: keycloak
+  namespace: keycloak
+  annotations:
+    # Same mechanism as argocd.koufan.dev: cert-manager watches for this,
+    # creates a Certificate from the tls block, and writes the result into
+    # keycloak-tls.
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: auth.koufan.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: keycloak
+                port:
+                  name: http
+  tls:
+    - hosts:
+        - auth.koufan.dev
+      secretName: keycloak-tls
