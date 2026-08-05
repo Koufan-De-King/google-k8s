@@ -35,6 +35,27 @@ spec:
   # This is the same class of setting as global.domain on Argo CD, and it fails
   # the same way when wrong: tokens are issued with an issuer nobody can reach,
   # and the error surfaces at the client rather than here.
+  # Required by the KeycloakOIDCClient CR. Without it the operator refuses the
+  # client with:
+  #
+  #   Cannot create/update because the server does not have
+  #   client-admin-api:v2 enabled
+  #
+  # The CRD exists in the operator regardless, so this reads as a bug in the
+  # manifest rather than a missing server capability — the resource is
+  # accepted by the API server and only fails later, in the operator's
+  # reconcile loop.
+  #
+  # `client-admin-api:v2` is the newer admin API that lets the operator manage
+  # clients as CRs. It is versioned (`feature:version`) because Keycloak ships
+  # multiple generations of a feature simultaneously, and it is not on by
+  # default in 26.7 — declaring clients declaratively is still newer ground
+  # than declaring realms. That is the trade for keeping the OIDC client in
+  # git rather than in the admin console.
+  features:
+    enabled:
+      - client-admin-api:v2
+
   hostname:
     hostname: https://keycloak.koufan.dev
 
