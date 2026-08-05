@@ -36,6 +36,31 @@ spec:
     server: https://kubernetes.default.svc
     namespace: keycloak
 
+  # Without this the app is permanently OutOfSync on the Postgres StatefulSet,
+  # and `kubectl diff` shows nothing — because the difference is not in the
+  # cluster, it is in how Argo CD compares.
+  #
+  # The API server rewrites volumeClaimTemplates on admission: it injects
+  # apiVersion and kind, defaults spec.volumeMode to Filesystem, and attaches
+  # a status block. None of that is in this repo, Argo CD's normaliser does not
+  # strip it, and so it reports drift that no one can act on.
+  #
+  # A permanently-OutOfSync application is worse than cosmetic. It trains you
+  # to ignore the one signal that is supposed to mean something, and real drift
+  # then hides in the noise.
+  #
+  # Ignoring the whole field is safe here specifically because
+  # volumeClaimTemplates is immutable on an existing StatefulSet — Kubernetes
+  # rejects changes to it outright, so there is no drift to detect. Resizing
+  # the volume means editing the PVC directly or recreating the StatefulSet,
+  # neither of which this diff would have helped with.
+  ignoreDifferences:
+    - group: apps
+      kind: StatefulSet
+      name: keycloak-postgres
+      jsonPointers:
+        - /spec/volumeClaimTemplates
+
   syncPolicy:
     automated:
       # prune here is genuinely destructive, unlike every other component in
