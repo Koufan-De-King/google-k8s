@@ -71,41 +71,6 @@ spec:
       - name: argocd-admins
       - name: argocd-viewers
 
-    # Keycloak does not put group membership in tokens by default. Without
-    # this, login succeeds, the `groups` claim is absent, every user falls
-    # through to policy.default (role:readonly), and it looks like Argo CD's
-    # RBAC is broken when in fact the token never carried the information.
-    #
-    # This defines a client scope containing a group-membership mapper that
-    # writes the claim.
-    clientScopes:
-      - name: groups
-        protocol: openid-connect
-        description: Group membership, consumed by Argo CD RBAC
-        attributes:
-          include.in.token.scope: "true"
-          display.on.consent.screen: "false"
-        protocolMappers:
-          - name: groups
-            protocol: openid-connect
-            protocolMapper: oidc-group-membership-mapper
-            config:
-              # "false" means emit "argocd-admins" rather than "/argocd-admins".
-              # Argo CD matches the literal string in policy.csv, and a leading
-              # slash silently fails to match.
-              full.path: "false"
-              claim.name: groups
-              id.token.claim: "true"
-              access.token.claim: "true"
-              userinfo.token.claim: "true"
-
-    # Assign that scope to every client created in this realm by default, so
-    # the Argo CD client picks it up without extra wiring.
-    defaultDefaultClientScopes:
-      - groups
-      - profile
-      - email
-
     # -------------------------------------------------------------------
     # The Argo CD OIDC client
     # -------------------------------------------------------------------
@@ -136,7 +101,12 @@ spec:
         # as passing the user's token. `publicClient: false` is what makes the
         # `secret` field below meaningful.
         publicClient: false
-        secret: $(env:ARGOCD_CLIENT_SECRET)
+        # ${VAR}, not $(env:VAR). The latter is silently left as a literal —
+        # and worse, Keycloak then treats it as an unusable value and
+        # generates a random secret instead, so the client works, Argo CD
+        # holds a different secret, and every login fails with
+        # "invalid_client" while both sides look correctly configured.
+        secret: "${ARGOCD_CLIENT_SECRET}"
 
         # Standard authorization-code flow. Everything else off: this is a
         # server-side web application, not a device, a service account, or a
@@ -159,12 +129,36 @@ spec:
           - https://argocd.koufan.dev
         baseUrl: https://argocd.koufan.dev
 
-        defaultClientScopes:
-          - groups
-          - profile
-          - email
-          - roles
-          - web-origins
+        # No defaultClientScopes listed, deliberately. During a realm import
+        # the built-in scopes (profile, email, roles, web-origins) do not
+        # exist yet when the client is processed, so naming them here makes
+        # Keycloak log "Referenced client scope 'profile' doesn't exist" and
+        # silently drop them — leaving the client with fewer scopes than
+        # asked for. Omitting the list lets Keycloak attach the realm defaults
+        # once they exist.
+        #
+        # Group membership is therefore attached as a mapper on the client
+        # itself rather than through a custom scope. Same claim, no ordering
+        # problem.
+        #
+        # This mapper is load-bearing: Keycloak does not put group membership
+        # in tokens by default. Without it, login succeeds, the `groups` claim
+        # is absent, every user falls through to policy.default, and it looks
+        # like Argo CD's RBAC is broken when the token never carried the
+        # information.
+        protocolMappers:
+          - name: groups
+            protocol: openid-connect
+            protocolMapper: oidc-group-membership-mapper
+            config:
+              # "false" emits "argocd-admins" rather than "/argocd-admins".
+              # Argo CD matches the literal string in policy.csv, and a
+              # leading slash fails to match silently.
+              full.path: "false"
+              claim.name: groups
+              id.token.claim: "true"
+              access.token.claim: "true"
+              userinfo.token.claim: "true"
 
     # Sensible for a homelab, and stated rather than inherited: no open
     # self-registration, and no password reset flow that depends on email
