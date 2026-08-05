@@ -1,0 +1,85 @@
+# -----------------------------------------------------------------------------
+# The homelab realm
+# -----------------------------------------------------------------------------
+# A realm is Keycloak's tenancy boundary: its own users, clients, roles and
+# signing keys, isolated from every other realm. The `master` realm that exists
+# by default is where Keycloak's own administrators live, and putting
+# applications in it means an application misconfiguration is a compromise of
+# the thing that administers Keycloak. So applications get their own realm.
+#
+# spec.realm below is a Keycloak RealmRepresentation — the same structure the
+# admin console exports. That is what makes this declarative: the realm is
+# described here rather than clicked into existence, and it can be recreated
+# on a rebuilt cluster.
+#
+# WHAT THIS DOES AND DOES NOT COVER:
+#
+# Configuration lives here. Users do not. Creating people as YAML would mean
+# their credentials in git, and a user's password is theirs rather than the
+# repo's. So: realm, groups, scopes and mappers are declared; you create your
+# own account in the admin console and add it to argocd-admins.
+#
+# That split is the honest one — identity *configuration* is reproducible from
+# this repo, identity *data* is not. It is the same line drawn in postgres.yaml.
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: KeycloakRealmImport
+metadata:
+  name: homelab
+  namespace: keycloak
+spec:
+  keycloakCRName: keycloak
+
+  realm:
+    realm: homelab
+    enabled: true
+    displayName: Homelab
+
+    # Groups are how authorisation is expressed. Argo CD's RBAC maps a group
+    # name to a role, so membership of argocd-admins is what grants admin —
+    # not a per-user rule that has to be edited every time someone joins.
+    groups:
+      - name: argocd-admins
+      - name: argocd-viewers
+
+    # Keycloak does not put group membership in tokens by default. Without
+    # this, login succeeds, the `groups` claim is absent, every user falls
+    # through to policy.default (role:readonly), and it looks like Argo CD's
+    # RBAC is broken when in fact the token never carried the information.
+    #
+    # This defines a client scope containing a group-membership mapper that
+    # writes the claim.
+    clientScopes:
+      - name: groups
+        protocol: openid-connect
+        description: Group membership, consumed by Argo CD RBAC
+        attributes:
+          include.in.token.scope: "true"
+          display.on.consent.screen: "false"
+        protocolMappers:
+          - name: groups
+            protocol: openid-connect
+            protocolMapper: oidc-group-membership-mapper
+            config:
+              # "false" means emit "argocd-admins" rather than "/argocd-admins".
+              # Argo CD matches the literal string in policy.csv, and a leading
+              # slash silently fails to match.
+              full.path: "false"
+              claim.name: groups
+              id.token.claim: "true"
+              access.token.claim: "true"
+              userinfo.token.claim: "true"
+
+    # Assign that scope to every client created in this realm by default, so
+    # the Argo CD client picks it up without extra wiring.
+    defaultDefaultClientScopes:
+      - groups
+      - profile
+      - email
+
+    # Sensible for a homelab, and stated rather than inherited: no open
+    # self-registration, and no password reset flow that depends on email
+    # delivery this cluster has not configured.
+    registrationAllowed: false
+    resetPasswordAllowed: false
+    loginWithEmailAllowed: true
+    duplicateEmailsAllowed: false

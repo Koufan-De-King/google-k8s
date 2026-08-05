@@ -1,0 +1,64 @@
+# -----------------------------------------------------------------------------
+# The Argo CD OIDC client
+# -----------------------------------------------------------------------------
+# In OIDC terms Keycloak is the identity provider and Argo CD is a client: a
+# registered application allowed to send users to Keycloak for authentication
+# and receive an identity token back. This object is that registration.
+#
+# It being a CR is the whole reason this repo uses the operator rather than a
+# Helm chart. Otherwise the client would be a form filled in once in the admin
+# console, and the most security-relevant configuration in the cluster would
+# exist nowhere in git — recoverable only from a database backup.
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: KeycloakOIDCClient
+metadata:
+  # There is no clientId field in this CRD. The client ID is taken from
+  # metadata.name, so this must match `clientID: argocd` in Argo CD's
+  # oidc.config. A mismatch produces "invalid_client" at the Keycloak end,
+  # which reads as a secret problem and is not one.
+  name: argocd
+  namespace: keycloak
+spec:
+  keycloakCRName: keycloak
+  realm: homelab
+
+  client:
+    enabled: true
+    displayName: Argo CD
+    description: GitOps controller at argocd.koufan.dev
+
+    auth:
+      # A confidential client: it proves its own identity with a shared secret
+      # as well as passing the user's token along. The alternative, a public
+      # client, holds no secret and relies solely on redirect URI matching —
+      # appropriate for a browser SPA, not for a server-side application that
+      # can keep a secret.
+      method: client-secret
+      secretRef:
+        # Read from a Kubernetes Secret, so the value is never in this file.
+        #
+        # NOTE this Secret lives in the `keycloak` namespace, while Argo CD
+        # reads the same value from a Secret in `argocd`. Secrets cannot be
+        # referenced across namespaces, so the same Secret Manager entry is
+        # materialised twice by two ExternalSecrets. One source of truth in
+        # GCP, two projections into the cluster.
+        name: argocd-oidc-client
+        key: clientSecret
+
+    # Where Keycloak is permitted to send the browser after authentication.
+    # This is a security control, not routing: it is what stops an attacker
+    # completing a login flow and having the token delivered to a host they
+    # control. Keycloak refuses any redirect not matching this list.
+    #
+    # /auth/callback is Argo CD's own OIDC handler. The /api/dex/callback path
+    # that appears in most Argo CD guides is NOT needed here — that is Dex's
+    # endpoint, and Dex is disabled because Keycloak speaks OIDC directly.
+    redirectUris:
+      - https://argocd.koufan.dev/auth/callback
+
+    # Permitted origins for browser requests carrying credentials. Narrower
+    # than the redirect list on purpose: an origin, not a path.
+    webOrigins:
+      - https://argocd.koufan.dev
+
+    appUrl: https://argocd.koufan.dev

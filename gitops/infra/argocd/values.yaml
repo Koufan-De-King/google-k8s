@@ -60,23 +60,30 @@ configs:
     # sources of truth that can drift apart.
 
     # ---------------------------------------------------------------------
-    # Keycloak / OIDC — the next thing to land. Left here as a marker so the
-    # shape of the change is visible before it's made.
-    #
-    # The clientSecret is written as `$oidc.keycloak.clientSecret`, which is
-    # not a literal: the leading `$` tells Argo CD to read the value out of
-    # the argocd-secret Secret at that key. That indirection is the point —
-    # the secret itself never appears in this file, and therefore never in
-    # this public repo. Getting the secret *into* the cluster is a separate
-    # problem (sealed-secrets, external-secrets, or by hand once) and is a
-    # decision for that piece of work, not this one.
+    # Keycloak / OIDC
     # ---------------------------------------------------------------------
-    # oidc.config: |
-    #   name: Keycloak
-    #   issuer: https://keycloak.example.com/realms/homelab
-    #   clientID: argocd
-    #   clientSecret: $oidc.keycloak.clientSecret
-    #   requestedScopes: ["openid", "profile", "email", "groups"]
+    # `clientSecret` is not a literal. The leading `$` tells Argo CD to
+    # dereference it, and the `name:key` form reads that key from that Secret
+    # — which ESO populates from GCP Secret Manager. The value never appears
+    # in this file and therefore never in this public repo.
+    #
+    # That Secret must carry the label app.kubernetes.io/part-of: argocd or
+    # the dereference silently yields nothing; the label is set in
+    # gitops/infra/external-secrets-config/.
+    #
+    # `issuer` must match EXACTLY what Keycloak advertises at
+    # /realms/homelab/.well-known/openid-configuration, character for
+    # character. Argo CD validates the `iss` claim against this string, so a
+    # trailing slash or http-vs-https mismatch rejects every otherwise-valid
+    # token. This is also why `proxy: headers: xforwarded` on the Keycloak CR
+    # matters — without it Keycloak advertises an http:// issuer and nothing
+    # here can be made to match.
+    oidc.config: |
+      name: Keycloak
+      issuer: https://keycloak.koufan.dev/realms/homelab
+      clientID: argocd
+      clientSecret: $argocd-oidc-secret:clientSecret
+      requestedScopes: ["openid", "profile", "email", "groups"]
 
   rbac:
     # Everyone who authenticates but matches no other rule gets read-only.
@@ -88,9 +95,25 @@ configs:
     # accidentally hand out more access than intended.
     policy.default: role:readonly
 
-    # Group-to-role mapping goes here once Keycloak issues group claims:
-    # policy.csv: |
-    #   g, argocd-admins, role:admin
+    # Maps Keycloak group membership onto Argo CD roles.
+    #
+    # `g, <subject>, <role>` reads as "this subject has this role". The
+    # subject is matched against values in the token's `groups` claim, which
+    # exists only because the homelab realm defines a group-membership mapper
+    # (see gitops/infra/keycloak/manifests/realm-homelab.yaml). No mapper, no
+    # claim, and every user falls through to policy.default — which looks
+    # like broken RBAC and is actually a missing claim.
+    #
+    # The group mapper is configured with full.path "false", so the claim
+    # contains "argocd-admins" rather than "/argocd-admins". A leading slash
+    # here would fail to match, silently.
+    #
+    # Authorisation is by GROUP, not by user. Granting someone admin is a
+    # membership change in Keycloak, not an edit to this file — which means
+    # access changes do not require a commit, a sync, and a restart.
+    policy.csv: |
+      g, argocd-admins, role:admin
+      g, argocd-viewers, role:readonly
 
 # The bundled Dex is only needed to bridge identity providers that don't
 # speak OIDC (GitHub, SAML, LDAP). Keycloak *is* an OIDC provider, so Argo CD
