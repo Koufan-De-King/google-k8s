@@ -83,7 +83,23 @@ configs:
       issuer: https://keycloak.koufan.dev/realms/homelab
       clientID: argocd
       clientSecret: $argocd-oidc-secret:clientSecret
-      requestedScopes: ["openid", "profile", "email", "groups"]
+      # NOTE "groups" is deliberately NOT requested here, even though RBAC
+      # depends on the groups claim.
+      #
+      # A scope and a claim are different things. Requesting a scope asks
+      # Keycloak to activate a named client scope, and Keycloak rejects the
+      # whole authorization request if that name does not exist:
+      #
+      #   invalid_scope: Invalid scopes: openid profile email groups
+      #
+      # There is no client scope called "groups" in the homelab realm. The
+      # group-membership mapper is attached directly to the argocd client
+      # instead (see realm-homelab.yaml), and a client's own mappers are
+      # applied on every token regardless of which scopes were requested.
+      #
+      # So the claim arrives without being asked for. Adding "groups" back
+      # here would break login without adding anything to the token.
+      requestedScopes: ["openid", "profile", "email"]
 
   rbac:
     # Everyone who authenticates but matches no other rule gets read-only.
