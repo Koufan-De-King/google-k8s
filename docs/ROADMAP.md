@@ -51,7 +51,20 @@ Pulled forward ahead of Phase 3, because Keycloak needs a real hostname and TLS 
 - [x] cert-manager for TLS — `gitops/infra/cert-manager/`, with Let's Encrypt issuers in `gitops/infra/cert-manager-issuers/`
 - [x] Argo CD served at https://argocd.koufan.dev on a real Let's Encrypt certificate, auto-renewing
 - [ ] **Decide how to protect the publicly-reachable Argo CD UI** — it is now on the open internet with a static admin password. Options: leave it until Keycloak lands, restrict by source IP at the ingress, or put it behind auth sooner
-- [ ] Basic observability (metrics-server at minimum)
+- [ ] Basic observability (metrics-server at minimum) — **note this will not currently schedule**, see below
+
+## Phase 4.5 — The cluster is out of CPU
+Adding Keycloak exposed a hard limit. Three e2-medium nodes give ~2820m allocatable, and GKE's own components take ~1560m of it before any of our workloads: kube-dns 540m, fluentbit 315m, kube-proxy 300m, gke-metadata-server 300m, kube-state-metrics 105m. Enabling Workload Identity is what added that last 300m — one `gke-metadata-server` pod per node.
+
+The cluster now sits at roughly 99% CPU *requested*. Actual utilisation is far lower, but the scheduler works on requests, so the next component simply will not schedule.
+
+- [x] Short-term: Keycloak's CPU request lowered from 250m to 150m so it fits
+- [ ] The Keycloak operator requests 300m — more than Keycloak itself. Patch it down with a Kustomize overlay over the upstream base
+- [ ] Decide the real fix:
+  - **Add a 4th e2-medium node** — +50GB disk (200GB of the 250GB quota), most incremental
+  - **Move to e2-standard-2** (2 vCPU per node) — replaces every node, roughly doubles CPU, costs more
+  - **Keep trimming requests** — free, but every component then runs without a guaranteed share, and scheduling gets fragile
+- [ ] Whichever is chosen, it is a `terraform/` change and therefore another node roll
 
 ## Phase 5 — Expand
 - [ ] Add more workloads as they come up

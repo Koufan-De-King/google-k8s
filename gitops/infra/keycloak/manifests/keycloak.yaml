@@ -78,13 +78,29 @@ spec:
       secret: keycloak-admin
 
   resources:
-    # Sized against real headroom. Each node has ~940m allocatable CPU and is
-    # already 67-77% requested, leaving roughly 750m across the cluster;
-    # Postgres takes 100m of it. Memory is the comfortable dimension here
-    # (~1.8Gi free per node) and CPU is the tight one, which is the opposite
-    # of what a JVM workload suggests.
+    # 250m did not schedule. `0/3 nodes are available: 3 Insufficient cpu`,
+    # with 215m / 171m / 5m actually free per node.
+    #
+    # The arithmetic is worth writing down, because it is a property of the
+    # cluster rather than of Keycloak. Three e2-medium nodes give ~2820m
+    # allocatable in total, and GKE's own components claim about 1560m of it
+    # before any workload of ours exists: kube-dns 540m, fluentbit 315m,
+    # kube-proxy 300m, gke-metadata-server 300m, kube-state-metrics 105m.
+    # That last one is new — enabling Workload Identity added a
+    # gke-metadata-server pod per node, so that step cost 300m of cluster CPU
+    # which nothing warned about at the time.
+    #
+    # A request is a scheduling reservation, not a ceiling. 150m is what
+    # Keycloak is guaranteed and what the scheduler subtracts from a node;
+    # the 1 CPU limit is what it may actually burst to, and since the nodes
+    # are far below 100% real utilisation, JVM startup still gets the CPU it
+    # wants. Lowering this trades guaranteed capacity for schedulability,
+    # which is the right trade on a cluster this size.
+    #
+    # It is a workaround, not a fix. The cluster is now ~99% requested, so
+    # the next component will not schedule at all. See docs/ROADMAP.md.
     requests:
-      cpu: 250m
+      cpu: 150m
       memory: 1Gi
     limits:
       cpu: "1"
