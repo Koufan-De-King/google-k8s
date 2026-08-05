@@ -29,6 +29,24 @@ metadata:
 spec:
   keycloakCRName: keycloak
 
+  # The import runs as a Job that boots a full Keycloak in import mode, and the
+  # operator defaults that Job to requesting 1700Mi. On this cluster the most
+  # any node had free was about 1654Mi, so it missed by roughly 50Mi and sat
+  # Pending with "0/3 nodes are available: 3 Insufficient memory".
+  #
+  # Same fix as Keycloak's CPU request: lower the reservation, keep the
+  # ceiling. The JVM still gets up to 1700Mi if it wants it; the scheduler only
+  # has to find 1Gi. Importing a realm this small does not come close to
+  # either number — the default is sized for importing a large existing realm.
+  #
+  # Second time cluster size has blocked a deployment. See Phase 4.5 in
+  # docs/ROADMAP.md; this is a symptom, not the fix.
+  resources:
+    requests:
+      memory: 1Gi
+    limits:
+      memory: 1700Mi
+
   realm:
     realm: homelab
     enabled: true
