@@ -47,6 +47,18 @@ spec:
     limits:
       memory: 1700Mi
 
+  # Injects the Argo CD client secret into the realm JSON below at import time.
+  # The realm references it as $(env:ARGOCD_CLIENT_SECRET); this maps that name
+  # to a key in a Kubernetes Secret that ESO populates from GCP Secret Manager.
+  #
+  # This is what allows the client to be declared here without its secret being
+  # written into this repo.
+  placeholders:
+    ARGOCD_CLIENT_SECRET:
+      secret:
+        name: argocd-oidc-client
+        key: clientSecret
+
   realm:
     realm: homelab
     enabled: true
@@ -93,6 +105,66 @@ spec:
       - groups
       - profile
       - email
+
+    # -------------------------------------------------------------------
+    # The Argo CD OIDC client
+    # -------------------------------------------------------------------
+    # Declared here rather than as a KeycloakOIDCClient CR. That CR exists and
+    # would be tidier, but it requires the server feature client-admin-api:v2,
+    # which Keycloak itself labels Experimental — and it failed twice on this
+    # cluster: first refusing the resource outright, then throwing a
+    # NullPointerException inside the operator's own admin client. Recovering
+    # from the second would have meant switching bootstrapAdmin to its service
+    # form, which the CRD documents as applying "only for initial cluster
+    # creation" — a database wipe.
+    #
+    # Nothing is lost by declaring it here. The client is still described in
+    # git, still reproducible on a rebuilt cluster, still reviewed in a diff.
+    # Only the CRD wrapper is gone.
+    #
+    # The one real cost: Keycloak's import will not necessarily overwrite an
+    # existing realm, so editing this client later may not take effect until
+    # the realm is re-imported or the change is made in the console. Revisit
+    # the CR approach once client-admin-api leaves preview.
+    clients:
+      - clientId: argocd
+        name: Argo CD
+        description: GitOps controller at argocd.koufan.dev
+        enabled: true
+
+        # A confidential client: it authenticates itself with a secret as well
+        # as passing the user's token. `publicClient: false` is what makes the
+        # `secret` field below meaningful.
+        publicClient: false
+        secret: $(env:ARGOCD_CLIENT_SECRET)
+
+        # Standard authorization-code flow. Everything else off: this is a
+        # server-side web application, not a device, a service account, or a
+        # legacy password-grant client.
+        standardFlowEnabled: true
+        directAccessGrantsEnabled: false
+        serviceAccountsEnabled: false
+        implicitFlowEnabled: false
+
+        # Where Keycloak may send the browser after authentication. A security
+        # control rather than routing: it is what stops an attacker completing
+        # a login and having the token delivered to a host they control.
+        #
+        # /auth/callback is Argo CD's own handler. The /api/dex/callback path
+        # in most guides is Dex's, and Dex is disabled here because Keycloak
+        # speaks OIDC directly.
+        redirectUris:
+          - https://argocd.koufan.dev/auth/callback
+        webOrigins:
+          - https://argocd.koufan.dev
+        baseUrl: https://argocd.koufan.dev
+
+        defaultClientScopes:
+          - groups
+          - profile
+          - email
+          - roles
+          - web-origins
 
     # Sensible for a homelab, and stated rather than inherited: no open
     # self-registration, and no password reset flow that depends on email
